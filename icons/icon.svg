@@ -1,11 +1,57 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="96" fill="#6dac20"/>
-  <path d="M96 300h320v58a34 34 0 0 1-34 34H130a34 34 0 0 1-34-34z" fill="#ffffff"/>
-  <path d="M150 300c0-58 47-105 106-105s106 47 106 105z" fill="#ffffff"/>
-  <circle cx="256" cy="268" r="40" fill="#4f8016"/>
-  <circle cx="256" cy="268" r="16" fill="#ffffff"/>
-  <circle cx="152" cy="392" r="30" fill="#333333"/>
-  <circle cx="360" cy="392" r="30" fill="#333333"/>
-  <rect x="196" y="150" width="120" height="20" rx="10" fill="#ffffff"/>
-  <rect x="246" y="120" width="20" height="46" rx="10" fill="#ffffff"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <clipPath id="scheibe"><circle cx="256" cy="256" r="243"/></clipPath>
+    <linearGradient id="korpus" x1="0.15" y1="0" x2="0.7" y2="1">
+      <stop offset="0"    stop-color="#d3f1f5"/>
+      <stop offset="0.45" stop-color="#8ed3dd"/>
+      <stop offset="1"    stop-color="#57a9b7"/>
+    </linearGradient>
+    <linearGradient id="deckel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fdfefe"/><stop offset="1" stop-color="#b4bdc1"/>
+    </linearGradient>
+    <linearGradient id="schuerze" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4a5257"/><stop offset="1" stop-color="#191d20"/>
+    </linearGradient>
+    <linearGradient id="rasen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5f9c1c"/><stop offset="1" stop-color="#39620f"/>
+    </linearGradient>
+  </defs>
+
+  <circle cx="256" cy="256" r="248" fill="#6dac20"/>
+
+  <g clip-path="url(#scheibe)">
+    <!-- Rasen -->
+    <path d="M0 404 Q256 380 512 404 L512 512 L0 512 Z" fill="url(#rasen)"/>
+    <g fill="#7cc229" opacity="0.9">
+      <path d="M92 404 l9 -30 l9 30 z"/>  <path d="M136 400 l8 -26 l8 26 z"/>
+      <path d="M368 400 l8 -26 l8 26 z"/> <path d="M412 404 l9 -30 l9 30 z"/>
+    </g>
+
+    <!-- Raeder und Schuerze -->
+    <circle cx="168" cy="352" r="30" fill="#14181a"/>
+    <circle cx="168" cy="352" r="12" fill="#8f989d"/>
+    <circle cx="352" cy="352" r="30" fill="#14181a"/>
+    <circle cx="352" cy="352" r="12" fill="#8f989d"/>
+    <rect x="86" y="306" width="340" height="50" rx="25" fill="url(#schuerze)"/>
+
+    <!-- Korpus: flach und breit -->
+    <path d="M92 314 C92 262 130 232 190 222 C240 214 286 214 334 223
+             C392 234 420 264 420 314 Z" fill="url(#korpus)"/>
+    <path d="M92 314 C92 262 130 232 190 222 C240 214 286 214 334 223
+             C392 234 420 264 420 314" fill="none" stroke="#4a97a6" stroke-width="4"/>
+
+    <!-- Bedienklappe -->
+    <rect x="204" y="238" width="146" height="48" rx="22" fill="url(#deckel)" stroke="#97a0a5" stroke-width="4"/>
+    <rect x="230" y="254" width="94" height="8" rx="4" fill="#63c2d2"/>
+    <rect x="230" y="268" width="62" height="7" rx="3.5" fill="#a9b2b6"/>
+
+    <!-- Stopptaste -->
+    <rect x="122" y="246" width="66" height="24" rx="12" fill="#ea6a12" stroke="#b04b07" stroke-width="3"/>
+
+    <!-- Glanzkante -->
+    <path d="M128 296 C130 254 168 232 212 226" fill="none" stroke="#ffffff" stroke-width="11"
+          stroke-linecap="round" opacity="0.5"/>
+  </g>
+
+  <circle cx="256" cy="256" r="243" fill="none" stroke="#5c9219" stroke-width="12"/>
 </svg>
