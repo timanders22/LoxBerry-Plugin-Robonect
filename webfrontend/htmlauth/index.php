@@ -164,6 +164,22 @@ $mw_host = mw_e(isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : '<loxberr
 .mw-tbl th { background: #f0f0f0; }
 .mw-wrap .mw-btn, .mw-wrap a.mw-btn, .mw-wrap button { text-shadow: none !important; box-shadow: none !important; }
 .mw-wrap a.mw-btn, .mw-wrap a.mw-btn:visited, .mw-wrap a.mw-btn:hover { color: #fff !important; text-decoration: none; }
+
+/* --- Einheitliches Kachel-Raster im Reiter Test (Standard aller Plugins) --- */
+.mw-h3 { color: #4f7d17; font-size: 1.0em; font-weight: 700; margin: 16px 0 2px; text-shadow: none !important; }
+.mw-knopfreihe { display: flex; flex-wrap: wrap; gap: 10px; margin: 10px 0 4px; align-items: stretch; }
+.mw-knopfreihe form { margin: 0; display: flex; }
+.mw-knopfreihe .mw-btn { flex: 0 0 auto; min-width: 250px; text-align: center;
+    display: inline-flex; align-items: center; justify-content: center; line-height: 1.25; }
+.mw-legende { display: flex; flex-wrap: wrap; gap: 14px; margin: 10px 0 2px; font-size: 0.86em; color: #555; }
+.mw-legende span { display: inline-flex; align-items: center; gap: 6px; }
+.mw-punkt { width: 13px; height: 13px; border-radius: 3px; display: inline-block; }
+.mw-btn.mw-b-lesen   { background: #6dac20; }
+.mw-btn.mw-b-technik { background: #546e7a; }
+.mw-btn.mw-b-aktion  { background: #e0620d; }
+.mw-punkt.mw-b-lesen   { background: #6dac20; }
+.mw-punkt.mw-b-technik { background: #546e7a; }
+.mw-punkt.mw-b-aktion  { background: #e0620d; }
 </style>
 <div class="mw-wrap">
 
@@ -416,17 +432,32 @@ Alle Werte auch per MQTT (Reiter Einstellungen) und als JSON:
 <!-- ================= Test ================= -->
 <div class="mw-pane" id="tab-test">
 <h2>Test</h2>
-<p>
-<a class="mw-btn" style="display:inline-block;margin-right:8px;" href="/plugins/<?= mw_e($mw_plugin) ?>/mower.php" target="_blank">Loxone-Zeile abrufen</a>
-<a class="mw-btn" style="display:inline-block;margin-right:8px;" href="/plugins/<?= mw_e($mw_plugin) ?>/mower.php?debug=1&amp;refresh=1" target="_blank">Debug</a>
-<a class="mw-btn" style="display:inline-block;margin-right:8px;background:#607d8b;" href="/plugins/<?= mw_e($mw_plugin) ?>/mower.php?json=1" target="_blank">JSON-Ansicht</a>
-<a class="mw-btn" style="display:inline-block;background:#e65100;" href="/plugins/<?= mw_e($mw_plugin) ?>/mower.php?ptest=1" target="_blank">Test-Pushnachricht</a>
-</p>
-<p>
-<a class="mw-btn" style="display:inline-block;margin-right:8px;background:#607d8b;" href="/plugins/<?= mw_e($mw_plugin) ?>/mower.php?cmd=auto" target="_blank">Automatik</a>
-<a class="mw-btn" style="display:inline-block;margin-right:8px;background:#607d8b;" href="/plugins/<?= mw_e($mw_plugin) ?>/mower.php?cmd=home" target="_blank">Nach Hause</a>
-<a class="mw-btn" style="display:inline-block;background:#607d8b;" href="/plugins/<?= mw_e($mw_plugin) ?>/mower.php?cmd=stop" target="_blank">Stopp</a>
-</p>
+<div class="mw-legende">
+<span><i class="mw-punkt mw-b-lesen"></i> Ansehen &mdash; fragt nur ab, ver&auml;ndert nichts</span>
+<span><i class="mw-punkt mw-b-technik"></i> Technische Auskunft &mdash; f&uuml;r die Fehlersuche</span>
+<span><i class="mw-punkt mw-b-aktion"></i> L&ouml;st etwas aus &mdash; sendet oder ver&auml;ndert</span>
+</div>
+
+<h3 class="mw-h3">Ansehen</h3>
+<div class="mw-knopfreihe">
+<a class="mw-btn mw-b-lesen"  href="/plugins/<?= mw_e($mw_plugin) ?>/mower.php" target="_blank">Loxone-Zeile abrufen</a>
+<a class="mw-btn mw-b-lesen"  href="/plugins/<?= mw_e($mw_plugin) ?>/mower.php?json=1" target="_blank">JSON-Ansicht</a>
+</div>
+
+<h3 class="mw-h3">Technische Auskunft</h3>
+<div class="mw-knopfreihe">
+<a class="mw-btn mw-b-technik"  href="/plugins/<?= mw_e($mw_plugin) ?>/mower.php?debug=1&amp;refresh=1" target="_blank">Debug</a>
+</div>
+
+<h3 class="mw-h3">L&ouml;st etwas aus</h3>
+<div class="mw-knopfreihe">
+<a class="mw-btn mw-b-aktion"  href="/plugins/<?= mw_e($mw_plugin) ?>/mower.php?ptest=1" target="_blank">Test-Pushnachricht</a>
+<a class="mw-btn mw-b-aktion"  href="/plugins/<?= mw_e($mw_plugin) ?>/mower.php?cmd=auto" target="_blank">Automatik</a>
+<a class="mw-btn mw-b-aktion"  href="/plugins/<?= mw_e($mw_plugin) ?>/mower.php?cmd=home" target="_blank">Nach Hause</a>
+<a class="mw-btn mw-b-aktion"  href="/plugins/<?= mw_e($mw_plugin) ?>/mower.php?cmd=stop" target="_blank">Stopp</a>
+</div>
+
+
 <div class="mw-small">&bdquo;Nach Hause&ldquo; ist der ungef&auml;hrlichste Test: Der M&auml;her f&auml;hrt zur Ladestation und bleibt dort,
 bis wieder auf Automatik gestellt wird.</div>
 <h2>Statuscodes im &Uuml;berblick</h2>
