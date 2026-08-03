@@ -1,6 +1,6 @@
 <?php
 /**
- * Rasenmaeher (Robonect) - Admin-Oberflaeche (v1.0.0)
+ * Rasenmaeher (Robonect) - Admin-Oberflaeche
  * Reiter: Einstellungen | Einbindung in Loxone | Test | Protokoll
  * Kompatibel mit PHP 7.4 und PHP 8.x (LoxBerry 3.x/4.x).
  *
@@ -54,6 +54,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['clearlog'])) {
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bladereset']) && function_exists('mo_blade_reset')) {
     mo_blade_reset(1);
     $mw_note = 'Messerwechsel quittiert &mdash; die Restlaufzeit startet neu.';
+}
+
+// ---------- Neues Aktionstoken erzeugen ----------
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['token_neu'])) {
+    $mw_cfg_tok = function_exists('mo_config') ? mo_config() : array();
+    if (!is_array($mw_cfg_tok)) { $mw_cfg_tok = array(); }
+    $mw_cfg_tok['aktionstoken'] = function_exists('mo_token_erzeugen') ? mo_token_erzeugen() : bin2hex(random_bytes(12));
+    if (!is_dir($mw_cfgdir)) { @mkdir($mw_cfgdir, 0775, true); }
+    $mw_json_tok = json_encode($mw_cfg_tok, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    if (@file_put_contents($mw_cfgfile, $mw_json_tok) !== false) {
+        @chmod($mw_cfgfile, 0600);
+        @copy($mw_cfgfile, $mw_bkfile);
+        @chmod($mw_bkfile, 0600);
+        $mw_note = 'Neues Token erzeugt. <b>Die Adressen in Loxone m&uuml;ssen '
+                 . 'angepasst werden</b> &ndash; die alten funktionieren nicht mehr.';
+    }
+    $mw_tab = 'tab-loxone';
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save'])) {
@@ -115,7 +132,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save'])) {
 $mw_cfg = function_exists('mo_config') ? mo_config() : array();
 if (!is_array($mw_cfg)) { $mw_cfg = array(); }
 $mw_cfg += array('mowers' => array(), 'cache_sec' => 20, 'blade_hours' => 200, 'blade_base' => 0,
-    'mqtt_enabled' => 0, 'mqtt_topic' => 'maeher', 'notify' => array(), 'tts' => array());
+    'mqtt_enabled' => 0, 'mqtt_topic' => 'maeher', 'notify' => array(), 'tts' => array(), 'aktionstoken' => '');
+
+// Beim ersten Aufruf ein Token erzeugen, damit der Endpunkt fuer Loxone sofort
+// benutzbar ist (schuetzt ?cmd= im unangemeldeten mower.php).
+if (empty($mw_cfg['aktionstoken'])) {
+    $mw_cfg['aktionstoken'] = function_exists('mo_token_erzeugen') ? mo_token_erzeugen() : bin2hex(random_bytes(12));
+    if (!is_dir($mw_cfgdir)) { @mkdir($mw_cfgdir, 0775, true); }
+    $mw_json_init = json_encode($mw_cfg, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    if (@file_put_contents($mw_cfgfile, $mw_json_init) !== false) {
+        @chmod($mw_cfgfile, 0600);
+        @copy($mw_cfgfile, $mw_bkfile);
+        @chmod($mw_bkfile, 0600);
+    }
+}
 $mw_notify = is_array($mw_cfg['notify']) ? $mw_cfg['notify'] : array();
 $mw_notify += array('audio' => 0, 'push' => 0, 'fehler' => 1, 'fertig' => 1, 'messer' => 1, 'akku' => 0);
 $mw_tts = is_array($mw_cfg['tts']) ? $mw_cfg['tts'] : array();
@@ -135,92 +165,92 @@ if ($mw_frame) { LBWeb::lbheader('Rasenm&auml;her (Robonect)', 'https://wiki.lox
 $mw_host = mw_e(isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : '<loxberry-ip>');
 ?>
 <style>
-.mw-wrap { max-width: 940px; margin: 0 auto; font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; color: #333; }
-.mw-wrap h2 { color: #6dac20; margin: 24px 0 10px; font-size: 1.15em; border-bottom: 2px solid #e0e0e0; padding-bottom: 6px; }
-.mw-wrap label { display: block; font-weight: 600; font-size: 0.88em; color: #555; margin: 10px 0 4px; }
-.mw-wrap input[type=text], .mw-wrap input[type=password], .mw-wrap input[type=number], .mw-wrap select, .mw-wrap textarea {
+.sm-wrap { max-width: 940px; margin: 0 auto; font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; color: #333; }
+.sm-wrap h2 { color: #6dac20; margin: 24px 0 10px; font-size: 1.15em; border-bottom: 2px solid #e0e0e0; padding-bottom: 6px; }
+.sm-wrap label { display: block; font-weight: 600; font-size: 0.88em; color: #555; margin: 10px 0 4px; }
+.sm-wrap input[type=text], .sm-wrap input[type=password], .sm-wrap input[type=number], .sm-wrap select, .sm-wrap textarea {
   width: 100%; padding: 8px 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 0.95em; box-sizing: border-box; }
-.mw-wrap input[type=checkbox] { width: 17px; height: 17px; margin: 0; vertical-align: middle; }
-.mw-row { display: flex; gap: 12px; flex-wrap: wrap; }
-.mw-row > div { flex: 1; min-width: 150px; }
-.mw-row > div > label:not([style]) { min-height: 2.6em; display: flex; align-items: flex-end; }
-.mw-btn { background: #6dac20; color: #fff !important; border: 0; border-radius: 6px; padding: 10px 22px; font-size: 1em; cursor: pointer; margin-top: 18px; font-weight: 600; }
-.mw-alert { border-radius: 8px; padding: 10px 14px; margin: 12px 0; }
-.mw-ok { background: #e8f5e9; border: 1px solid #a5d6a7; }
-.mw-err { background: #ffebee; border: 1px solid #ef9a9a; }
-.mw-warn { background: #fff8e1; border: 1px solid #ffe082; }
-.mw-info { background: #e3f2fd; border: 1px solid #90caf9; font-size: 0.9em; }
-.mw-mono { font-family: ui-monospace, monospace; background: #f5f5f5; padding: 2px 6px; border-radius: 4px; }
-.mw-small { font-size: 0.82em; color: #666; margin-top: 3px; }
-.mw-tabs { display: flex; gap: 4px; margin: 14px 0 0; border-bottom: 2px solid #6dac20; flex-wrap: wrap; }
-.mw-tab { background: #eee; border: 1px solid #ccc; border-bottom: 0; border-radius: 8px 8px 0 0; padding: 9px 18px; cursor: pointer; font-size: 0.95em; color: #444 !important; text-shadow: none !important; }
-.mw-tab.mw-active { background: #6dac20; color: #fff !important; border-color: #6dac20; font-weight: 600; }
-.mw-pane { display: none; padding-top: 4px; }
-.mw-pane.mw-active { display: block; }
-.mw-log { text-shadow: none !important; background: #1e1e1e; color: #d4d4d4; font-family: ui-monospace, monospace; font-size: 0.82em; padding: 12px; border-radius: 8px; max-height: 480px; overflow: auto; white-space: pre-wrap; }
-.mw-step { margin: 10px 0; padding: 10px 14px; background: #fafafa; border-left: 4px solid #6dac20; border-radius: 0 8px 8px 0; }
-.mw-tbl { border-collapse: collapse; margin: 8px 0; }
-.mw-tbl th, .mw-tbl td { border: 1px solid #ddd; padding: 6px 10px; text-align: left; font-size: 0.9em; }
-.mw-tbl th { background: #f0f0f0; }
-.mw-wrap .mw-btn, .mw-wrap a.mw-btn, .mw-wrap button { text-shadow: none !important; box-shadow: none !important; }
-.mw-wrap a.mw-btn, .mw-wrap a.mw-btn:visited, .mw-wrap a.mw-btn:hover { color: #fff !important; text-decoration: none; }
+.sm-wrap input[type=checkbox] { width: 17px; height: 17px; margin: 0; vertical-align: middle; }
+.sm-row { display: flex; gap: 12px; flex-wrap: wrap; }
+.sm-row > div { flex: 1; min-width: 150px; }
+.sm-row > div > label:not([style]) { min-height: 2.6em; display: flex; align-items: flex-end; }
+.sm-btn { background: #6dac20; color: #fff !important; border: 0; border-radius: 6px; padding: 10px 22px; font-size: 1em; cursor: pointer; margin-top: 18px; font-weight: 600; }
+.sm-alert { border-radius: 8px; padding: 10px 14px; margin: 12px 0; }
+.sm-ok { background: #e8f5e9; border: 1px solid #a5d6a7; }
+.sm-err { background: #ffebee; border: 1px solid #ef9a9a; }
+.sm-warn { background: #fff8e1; border: 1px solid #ffe082; }
+.sm-info { background: #e3f2fd; border: 1px solid #90caf9; font-size: 0.9em; }
+.sm-mono { font-family: ui-monospace, monospace; background: #f5f5f5; padding: 2px 6px; border-radius: 4px; }
+.sm-small { font-size: 0.82em; color: #666; margin-top: 3px; }
+.sm-tabs { display: flex; gap: 4px; margin: 14px 0 0; border-bottom: 2px solid #6dac20; flex-wrap: wrap; }
+.sm-tab { background: #eee; border: 1px solid #ccc; border-bottom: 0; border-radius: 8px 8px 0 0; padding: 9px 18px; cursor: pointer; font-size: 0.95em; color: #444 !important; text-shadow: none !important; }
+.sm-tab.sm-active { background: #6dac20; color: #fff !important; border-color: #6dac20; font-weight: 600; }
+.sm-pane { display: none; padding-top: 4px; }
+.sm-pane.sm-active { display: block; }
+.sm-log { text-shadow: none !important; background: #1e1e1e; color: #d4d4d4; font-family: ui-monospace, monospace; font-size: 0.82em; padding: 12px; border-radius: 8px; max-height: 480px; overflow: auto; white-space: pre-wrap; }
+.sm-step { margin: 10px 0; padding: 10px 14px; background: #fafafa; border-left: 4px solid #6dac20; border-radius: 0 8px 8px 0; }
+.sm-tbl { border-collapse: collapse; margin: 8px 0; }
+.sm-tbl th, .sm-tbl td { border: 1px solid #ddd; padding: 6px 10px; text-align: left; font-size: 0.9em; }
+.sm-tbl th { background: #f0f0f0; }
+.sm-wrap .sm-btn, .sm-wrap a.sm-btn, .sm-wrap button { text-shadow: none !important; box-shadow: none !important; }
+.sm-wrap a.sm-btn, .sm-wrap a.sm-btn:visited, .sm-wrap a.sm-btn:hover { color: #fff !important; text-decoration: none; }
 
-/* --- Einheitliches Kachel-Raster im Reiter Test (Standard aller Plugins) --- */
-.mw-h3 { color: #4f7d17; font-size: 1.0em; font-weight: 700; margin: 16px 0 2px; text-shadow: none !important; }
-.mw-knopfreihe { display: flex; flex-wrap: wrap; gap: 10px; margin: 10px 0 4px; align-items: stretch; }
-.mw-knopfreihe form { margin: 0; display: flex; }
-.mw-knopfreihe .mw-btn { flex: 0 0 auto; min-width: 250px; text-align: center;
+/* --- Einheitliches Kachel-Raster im Reiter <?php echo mo_t('TEXT.TEST'); ?> (Standard aller Plugins) --- */
+.sm-h3 { color: #4f7d17; font-size: 1.0em; font-weight: 700; margin: 16px 0 2px; text-shadow: none !important; }
+.sm-knopfreihe { display: flex; flex-wrap: wrap; gap: 10px; margin: 10px 0 4px; align-items: stretch; }
+.sm-knopfreihe form { margin: 0; display: flex; }
+.sm-knopfreihe .sm-btn { flex: 0 0 auto; min-width: 250px; text-align: center;
     display: inline-flex; align-items: center; justify-content: center; line-height: 1.25; }
-.mw-legende { display: flex; flex-wrap: wrap; gap: 14px; margin: 10px 0 2px; font-size: 0.86em; color: #555; }
-.mw-legende span { display: inline-flex; align-items: center; gap: 6px; }
-.mw-punkt { width: 13px; height: 13px; border-radius: 3px; display: inline-block; }
-.mw-btn.mw-b-lesen   { background: #6dac20; }
-.mw-btn.mw-b-technik { background: #546e7a; }
-.mw-btn.mw-b-aktion  { background: #e0620d; }
-.mw-punkt.mw-b-lesen   { background: #6dac20; }
-.mw-punkt.mw-b-technik { background: #546e7a; }
-.mw-punkt.mw-b-aktion  { background: #e0620d; }
+.sm-legende { display: flex; flex-wrap: wrap; gap: 14px; margin: 10px 0 2px; font-size: 0.86em; color: #555; }
+.sm-legende span { display: inline-flex; align-items: center; gap: 6px; }
+.sm-punkt { width: 13px; height: 13px; border-radius: 3px; display: inline-block; }
+.sm-btn.sm-b-lesen   { background: #6dac20; }
+.sm-btn.sm-b-technik { background: #546e7a; }
+.sm-btn.sm-b-aktion  { background: #e0620d; }
+.sm-punkt.sm-b-lesen   { background: #6dac20; }
+.sm-punkt.sm-b-technik { background: #546e7a; }
+.sm-punkt.sm-b-aktion  { background: #e0620d; }
 </style>
-<div class="mw-wrap">
+<div class="sm-wrap">
 
-<?php if ($mw_saved) { ?><div class="mw-alert mw-ok"><b>Konfiguration gespeichert</b> (Zugangsdaten mit Dateirechten 0600, inkl. Sicherungskopie f&uuml;r Updates).</div><?php } ?>
-<?php if ($mw_note !== '') { ?><div class="mw-alert mw-ok"><?= $mw_note ?></div><?php } ?>
-<?php if ($mw_err !== '') { ?><div class="mw-alert mw-err"><b>Fehler:</b> <?= $mw_err ?></div><?php } ?>
+<?php if ($mw_saved) { ?><div class="sm-alert sm-ok"><b><?php echo mo_t('TEXT.KONFIGURATION_GESPEICHERT'); ?></b> <?php echo mo_t('TEXT.ZUGANGSDATEN_MIT_DATEIRECHTEN_0600'); ?></div><?php } ?>
+<?php if ($mw_note !== '') { ?><div class="sm-alert sm-ok"><?= $mw_note ?></div><?php } ?>
+<?php if ($mw_err !== '') { ?><div class="sm-alert sm-err"><b><?php echo mo_t('TEXT.FEHLER'); ?></b> <?= $mw_err ?></div><?php } ?>
 
 <?php if (!$mw_list) { ?>
-<div class="mw-alert mw-info"><b>Noch kein M&auml;her eingerichtet.</b> Bitte unten Adresse, Benutzer und Passwort des Robonect-Moduls eintragen.</div>
+<div class="sm-alert sm-info"><b><?php echo mo_t('TEXT.NOCH_KEIN_MHER_EINGERICHTET'); ?></b> <?php echo mo_t('TEXT.BITTE_UNTEN_ADRESSE_BENUTZER_UND_P'); ?></div>
 <?php } ?>
 <?php foreach ($mw_states as $mw_k => $mw_s) { ?>
-<div class="mw-alert <?= $mw_s['fehler'] ? 'mw-warn' : 'mw-info' ?>">
+<div class="sm-alert <?= $mw_s['fehler'] ? 'sm-warn' : 'sm-info' ?>">
 <b><?= mw_e($mw_s['name']) ?></b>:
 <?php if ($mw_s['ok']) { ?>
-<b><?= mw_e($mw_s['text']) ?></b> &middot; Betriebsart <?= mw_e($mw_s['modus_text']) ?> &middot; Akku <?= (int) $mw_s['batterie'] ?> %
+<b><?= mw_e($mw_s['text']) ?></b> <?php echo mo_t('TEXT.BETRIEBSART'); ?> <?= mw_e($mw_s['modus_text']) ?> <?php echo mo_t('TEXT.AKKU'); ?> <?= (int) $mw_s['batterie'] ?> %
 <?= $mw_s['fehler'] ? ' &middot; <b>Fehler ' . (int) $mw_s['fehler'] . '</b> ' . mw_e($mw_s['fehlertext']) : '' ?><br>
-Betriebsstunden gesamt: <?= (int) $mw_s['stunden'] ?> h<?= $mw_s['dauer'] > 0 ? ' &middot; aktuelle Laufzeit ' . (int) $mw_s['dauer'] . ' min' : '' ?><br>
-Messer: <?= $mw_s['messer_rest'] >= 0 ? ($mw_s['messer_warn'] ? '<b>Wechsel f&auml;llig</b>' : 'noch <b>' . (int) $mw_s['messer_rest'] . ' h</b> bis zum Wechsel') : '&ndash;' ?>
-&middot; Temperatur <?= mw_e($mw_s['temperatur']) ?> &deg;C &middot; Feuchte <?= mw_e($mw_s['feuchte']) ?> % &middot; WLAN <?= (int) $mw_s['wlan'] ?> dBm
+<?php echo mo_t('TEXT.BETRIEBSSTUNDEN_GESAMT'); ?> <?= (int) $mw_s['stunden'] ?> h<?= $mw_s['dauer'] > 0 ? ' &middot; aktuelle Laufzeit ' . (int) $mw_s['dauer'] . ' min' : '' ?><br>
+<?php echo mo_t('TEXT.MESSER'); ?> <?= $mw_s['messer_rest'] >= 0 ? ($mw_s['messer_warn'] ? '<b>Wechsel f&auml;llig</b>' : 'noch <b>' . (int) $mw_s['messer_rest'] . ' h</b> bis zum Wechsel') : '&ndash;' ?>
+&middot; Temperatur <?= mw_e($mw_s['temperatur']) ?> <?php echo mo_t('TEXT.C_FEUCHTE'); ?> <?= mw_e($mw_s['feuchte']) ?> <?php echo mo_t('TEXT.WLAN'); ?> <?= (int) $mw_s['wlan'] ?> dBm
 <?php } else { ?>
-<b>keine Verbindung</b> &mdash; Adresse und Zugangsdaten pr&uuml;fen (Robonect-Oberfl&auml;che im Browser erreichbar?).
+<b><?php echo mo_t('TEXT.KEINE_VERBINDUNG'); ?></b> <?php echo mo_t('TEXT.ADRESSE_UND_ZUGANGSDATEN_PRFEN_ROB'); ?>
 <?php } ?>
 </div>
 <?php } ?>
 
-<div class="mw-tabs">
-    <div class="mw-tab" data-pane="tab-settings">Einstellungen</div>
-    <div class="mw-tab" data-pane="tab-loxone">Einbindung in Loxone</div>
-    <div class="mw-tab" data-pane="tab-test">Test</div>
-    <div class="mw-tab" data-pane="tab-log">Protokoll</div>
+<div class="sm-tabs">
+    <div class="sm-tab" data-pane="tab-settings"><?php echo mo_t('REITER.EINSTELLUNGEN'); ?></div>
+    <div class="sm-tab" data-pane="tab-loxone"><?php echo mo_t('REITER.LOXONE'); ?></div>
+    <div class="sm-tab" data-pane="tab-test"><?php echo mo_t('REITER.TEST'); ?></div>
+    <div class="sm-tab" data-pane="tab-log"><?php echo mo_t('REITER.LOG'); ?></div>
 </div>
 
-<!-- ================= Einstellungen ================= -->
-<div class="mw-pane" id="tab-settings">
-<form method="post" autocomplete="off">
+<!-- ================= <?php echo mo_t('TEXT.EINSTELLUNG'); ?>en ================= -->
+<div class="sm-pane" id="tab-settings">
+<form action="index.php" method="post" autocomplete="off">
 <input data-role="none" type="hidden" name="save" value="1">
 <input data-role="none" type="hidden" name="activetab" value="tab-settings">
 
-<h2>M&auml;her (bis zu 2)</h2>
-<table class="mw-tbl" style="width:100%;">
-<tr><th style="width:36px;">Nr.</th><th style="width:26%;">Name (frei)</th><th>Adresse</th><th style="width:20%;">Benutzer</th><th style="width:22%;">Passwort</th></tr>
+<h2><?php echo mo_t('TEXT.MHER_BIS_ZU_2'); ?></h2>
+<table class="sm-tbl" style="width:100%;">
+<tr><th style="width:36px;">Nr.</th><th style="width:26%;"><?php echo mo_t('TEXT.NAME_FREI'); ?></th><th><?php echo mo_t('TEXT.ADRESSE'); ?></th><th style="width:20%;"><?php echo mo_t('TEXT.BENUTZER'); ?></th><th style="width:22%;"><?php echo mo_t('TEXT.PASSWORT'); ?></th></tr>
 <?php for ($mw_i = 0; $mw_i < 2; $mw_i++) {
     $mw_r = isset($mw_cfg['mowers'][$mw_i]) ? (array) $mw_cfg['mowers'][$mw_i] : array();
     $mw_r += array('name' => '', 'ip' => '', 'user' => '', 'pass' => ''); ?>
@@ -233,257 +263,269 @@ Messer: <?= $mw_s['messer_rest'] >= 0 ? ($mw_s['messer_warn'] ? '<b>Wechsel f&au
 </tr>
 <?php } ?>
 </table>
-<div class="mw-alert mw-ok">Das Passwort wird <b>nie angezeigt</b> und beim Speichern behalten, wenn das Feld leer bleibt.
-Es liegt ausschlie&szlig;lich in der Plugin-Konfiguration (Dateirechte 0600) und wird per HTTP-Basic-Auth &uuml;bertragen &mdash;
-<b>in der Loxone-Projektdatei steht damit kein Passwort mehr</b>. Genau daf&uuml;r gibt es dieses Plugin.</div>
+<div class="sm-alert sm-ok"><?php echo mo_t('TEXT.DAS_PASSWORT_WIRD'); ?> <b><?php echo mo_t('TEXT.NIE_ANGEZEIGT'); ?></b> <?php echo mo_t('TEXT.UND_BEIM_SPEICHERN_BEHALTEN_WENN_D'); ?>
+<b><?php echo mo_t('TEXT.IN_DER_LOXONE_PROJEKTDATEI_STEHT_D'); ?></b><?php echo mo_t('TEXT.GENAU_DAFR_GIBT_ES_DIESES_PLUGIN'); ?></div>
 
-<div class="mw-row">
+<div class="sm-row">
     <div>
-        <label>Status-Cache (Sekunden)</label>
+        <label><?php echo mo_t('TEXT.STATUS_CACHE_SEKUNDEN'); ?></label>
         <input data-role="none" type="number" name="cache_sec" value="<?= (int) $mw_cfg['cache_sec'] ?>" min="5" max="300">
-        <div class="mw-small">Empfehlung 20 &mdash; eine Loxone-Abfrage alle 30 s reicht v&ouml;llig.</div>
+        <div class="sm-small"><?php echo mo_t('TEXT.EMPFEHLUNG_20_EINE_LOXONE_ABFRAGE_'); ?></div>
     </div>
     <div>
-        <label>Messerwechsel-Intervall (Betriebsstunden)</label>
+        <label><?php echo mo_t('TEXT.MESSERWECHSEL_INTERVALL_BETRIEBSST'); ?></label>
         <input data-role="none" type="number" name="blade_hours" value="<?= (int) $mw_cfg['blade_hours'] ?>" min="1" max="2000">
-        <div class="mw-small">Herstellerangabe, oft 150&ndash;250 h.</div>
+        <div class="sm-small"><?php echo mo_t('TEXT.HERSTELLERANGABE_OFT_150250_H'); ?></div>
     </div>
     <div>
-        <label>Nullpunkt: Stunden beim letzten Wechsel</label>
+        <label><?php echo mo_t('TEXT.NULLPUNKT_STUNDEN_BEIM_LETZTEN_WEC'); ?></label>
         <input data-role="none" type="number" name="blade_base" value="<?= (int) $mw_cfg['blade_base'] ?>" min="0" max="100000">
-        <div class="mw-small">Wird beim Quittieren automatisch gesetzt (Knopf unten oder <span class="mw-mono">?cmd=blade_reset</span>).</div>
+        <div class="sm-small"><?php echo mo_t('TEXT.WIRD_BEIM_QUITTIEREN_AUTOMATISCH_G'); ?> <span class="sm-mono"><?php echo mo_t('TEXT.CMD_BLADE_RESET'); ?></span>).</div>
     </div>
 </div>
 
-<h2>Meldungen</h2>
+<h2><?php echo mo_t('TEXT.MELDUNGEN'); ?></h2>
 <div style="margin-bottom:10px;">
     <label style="display:inline-flex;align-items:center;gap:6px;margin-right:24px;">
-        <input data-role="none" type="checkbox" name="notify_audio" <?= !empty($mw_notify['audio']) ? 'checked' : '' ?>> Audioausgabe aktiv
+        <input data-role="none" type="checkbox" name="notify_audio" <?= !empty($mw_notify['audio']) ? 'checked' : '' ?><?php echo mo_t('TEXT.AUDIOAUSGABE_AKTIV'); ?>
     </label>
     <label style="display:inline-flex;align-items:center;gap:6px;">
-        <input data-role="none" type="checkbox" name="notify_push" <?= !empty($mw_notify['push']) ? 'checked' : '' ?>> Push-Nachricht aktiv
+        <input data-role="none" type="checkbox" name="notify_push" <?= !empty($mw_notify['push']) ? 'checked' : '' ?><?php echo mo_t('TEXT.PUSH_NACHRICHT_AKTIV'); ?>
     </label>
-    <div class="mw-small">Die Ansage spricht das Plugin selbst; den Push verschickt der Miniserver &uuml;ber <span class="mw-mono">ANN=1</span>.</div>
+    <div class="sm-small"><?php echo mo_t('TEXT.DIE_ANSAGE_SPRICHT_DAS_PLUGIN_SELB'); ?> <span class="sm-mono"><?php echo mo_t('TEXT.ANN_1'); ?></span>.</div>
 </div>
 <div>
     <label style="display:inline-flex;align-items:center;gap:6px;margin-right:20px;">
-        <input data-role="none" type="checkbox" name="n_fehler" <?= !empty($mw_notify['fehler']) ? 'checked' : '' ?>> St&ouml;rung / Schleifensignal verloren
+        <input data-role="none" type="checkbox" name="n_fehler" <?= !empty($mw_notify['fehler']) ? 'checked' : '' ?><?php echo mo_t('TEXT.STRUNG_SCHLEIFENSIGNAL_VERLOREN'); ?>
     </label>
     <label style="display:inline-flex;align-items:center;gap:6px;margin-right:20px;">
-        <input data-role="none" type="checkbox" name="n_fertig" <?= !empty($mw_notify['fertig']) ? 'checked' : '' ?>> M&auml;hen beendet
+        <input data-role="none" type="checkbox" name="n_fertig" <?= !empty($mw_notify['fertig']) ? 'checked' : '' ?><?php echo mo_t('TEXT.MHEN_BEENDET'); ?>
     </label>
     <label style="display:inline-flex;align-items:center;gap:6px;margin-right:20px;">
-        <input data-role="none" type="checkbox" name="n_messer" <?= !empty($mw_notify['messer']) ? 'checked' : '' ?>> Messerwechsel f&auml;llig
+        <input data-role="none" type="checkbox" name="n_messer" <?= !empty($mw_notify['messer']) ? 'checked' : '' ?><?php echo mo_t('TEXT.MESSERWECHSEL_FLLIG'); ?>
     </label>
     <label style="display:inline-flex;align-items:center;gap:6px;">
-        <input data-role="none" type="checkbox" name="n_akku" <?= !empty($mw_notify['akku']) ? 'checked' : '' ?>> Akku unter 20 % au&szlig;erhalb der Station
+        <input data-role="none" type="checkbox" name="n_akku" <?= !empty($mw_notify['akku']) ? 'checked' : '' ?><?php echo mo_t('TEXT.AKKU_UNTER_20_AUERHALB_DER_STATION'); ?>
     </label>
 </div>
 
-<h2>Sprachausgabe</h2>
-<div class="mw-row">
+<h2><?php echo mo_t('TEXT.SPRACHAUSGABE'); ?></h2>
+<div class="sm-row">
     <div>
-        <label>Audio-Ausgabe</label>
+        <label><?php echo mo_t('TEXT.AUDIO_AUSGABE'); ?></label>
         <select data-role="none" name="tts_mode" id="tts_mode" onchange="mwTtsMode()">
-            <option value="musicserver"<?= $mw_tts['mode'] === 'musicserver' ? ' selected' : '' ?>>Loxone Music Server (klassisch)</option>
-            <option value="ms4h"<?= $mw_tts['mode'] === 'ms4h' ? ' selected' : '' ?>>Audioserver4Home / MusicServer4Home</option>
-            <option value="audioserver"<?= $mw_tts['mode'] === 'audioserver' ? ' selected' : '' ?>>Original Loxone Audioserver (via Loxone Config)</option>
-            <option value="custom"<?= $mw_tts['mode'] === 'custom' ? ' selected' : '' ?>>Eigene URL-Vorlage</option>
+            <option value="musicserver"<?= $mw_tts['mode'] === 'musicserver' ? ' selected' : '' ?><?php echo mo_t('TEXT.LOXONE_MUSIC_SERVER_KLASSISCH'); ?></option>
+            <option value="ms4h"<?= $mw_tts['mode'] === 'ms4h' ? ' selected' : '' ?><?php echo mo_t('TEXT.AUDIOSERVER4HOME_MUSICSERVER4HOME'); ?></option>
+            <option value="audioserver"<?= $mw_tts['mode'] === 'audioserver' ? ' selected' : '' ?><?php echo mo_t('TEXT.ORIGINAL_LOXONE_AUDIOSERVER_VIA_LO'); ?></option>
+            <option value="custom"<?= $mw_tts['mode'] === 'custom' ? ' selected' : '' ?><?php echo mo_t('TEXT.EIGENE_URL_VORLAGE'); ?></option>
         </select>
     </div>
     <div>
-        <label>IP des Audio-Servers</label>
+        <label><?php echo mo_t('TEXT.IP_DES_AUDIO_SERVERS'); ?></label>
         <input data-role="none" type="text" name="tts_ip" value="<?= mw_e($mw_tts['ip']) ?>" placeholder="z. B. 192.168.1.50">
     </div>
     <div>
-        <label>Port</label>
+        <label><?php echo mo_t('TEXT.PORT'); ?></label>
         <input data-role="none" type="number" name="tts_port" value="<?= (int) $mw_tts['port'] ?>" min="1" max="65535">
     </div>
 </div>
-<div class="mw-row">
+<div class="sm-row">
     <div>
-        <label>Zonen</label>
+        <label><?php echo mo_t('TEXT.ZONEN'); ?></label>
         <input data-role="none" type="text" name="tts_zones" value="<?= mw_e($mw_tts['zones']) ?>" placeholder="z. B. 2,4,6">
-        <div class="mw-small">Zonennummern mit Komma (z.&nbsp;B. <span class="mw-mono">2,4,6</span>) &mdash; die Lautst&auml;rke kommt aus dem Feld daneben. Optional je Zone eigene Lautst&auml;rke: <span class="mw-mono">Zone~Lautst&auml;rke</span> (z.&nbsp;B. <span class="mw-mono">2~25,4~40</span>). Leerzeichen nach dem Komma sind erlaubt &mdash; <span class="mw-mono">2,4,6</span> und <span class="mw-mono">2, 4, 6</span> funktionieren beide.</div>
+        <div class="sm-small"><?php echo mo_t('TEXT.ZONENNUMMERN_MIT_KOMMA_Z_B'); ?> <span class="sm-mono">2,4,6</span><?php echo mo_t('TEXT.DIE_LAUTSTRKE_KOMMT_AUS_DEM_FELD_D'); ?> <span class="sm-mono"><?php echo mo_t('TEXT.ZONE_LAUTSTRKE'); ?></span> <?php echo mo_t('TEXT.Z_B'); ?> <span class="sm-mono">2~25,4~40</span><?php echo mo_t('TEXT.LEERZEICHEN_NACH_DEM_KOMMA_SIND_ER'); ?> <span class="sm-mono">2,4,6</span> und <span class="sm-mono">2, 4, 6</span> <?php echo mo_t('TEXT.FUNKTIONIEREN_BEIDE'); ?></div>
     </div>
     <div>
-        <label>Lautst&auml;rke (%)</label>
+        <label><?php echo mo_t('TEXT.LAUTSTRKE'); ?></label>
         <input data-role="none" type="number" name="tts_volume" value="<?= (int) $mw_tts['volume'] ?>" min="1" max="100">
     </div>
     <div>
-        <label>Sprache</label>
+        <label><?php echo mo_t('TEXT.SPRACHE'); ?></label>
         <input data-role="none" type="text" name="tts_lang" value="<?= mw_e($mw_tts['lang']) ?>" maxlength="2">
     </div>
 </div>
 <div id="tts_template_row">
-    <label>URL-Vorlage (f&uuml;r Audioserver4Home/MS4H bzw. eigene Ausgabe)</label>
-    <textarea data-role="none" name="tts_template" id="tts_template" rows="2" placeholder="http://{ip}:{port}/tts?text={text}&amp;zone={zones}&amp;vol={vol}"><?= mw_e($mw_tts['template']) ?></textarea>
-    <div class="mw-small">Platzhalter: <span class="mw-mono">{ip} {port} {zones} {vol} {lang} {text}</span>. Leer = Standard-Vorlage.</div>
+    <label><?php echo mo_t('TEXT.URL_VORLAGE_FR_AUDIOSERVER4HOME_MS'); ?></label>
+    <textarea data-role="none" name="tts_template" id="tts_template" rows="2" placeholder="<?php echo mo_t('TEXT.HTTP'); ?>{ip}:{port}/tts?text={text}&amp;zone={zones}&amp;vol={vol}"><?= mw_e($mw_tts['template']) ?></textarea>
+    <div class="sm-small"><?php echo mo_t('TEXT.PLATZHALTER'); ?> <span class="sm-mono"><?php echo mo_t('TEXT.IP_PORT_ZONES_VOL_LANG_TEXT'); ?></span><?php echo mo_t('TEXT.LEER_STANDARD_VORLAGE'); ?></div>
 </div>
-<div id="tts_audioserver_hint" class="mw-alert mw-info" style="display:none;">
-    Der originale Loxone Audioserver bietet keine HTTP-TTS-Schnittstelle. In diesem Modus spricht das Plugin nicht selbst;
-    die Ausgabe baut man in Loxone Config &uuml;ber Textgenerator und <span class="mw-mono">ANN=1</span>.
+<div id="tts_audioserver_hint" class="sm-alert sm-info" style="display:none;">
+    <?php echo mo_t('TEXT.DER_ORIGINALE_LOXONE_AUDIOSERVER_B'); ?> <span class="sm-mono">ANN=1</span>.
 </div>
 
-<h2>MQTT (optional)</h2>
+<h2><?php echo mo_t('TEXT.MQTT_OPTIONAL'); ?></h2>
 <label style="display:inline-flex;align-items:center;gap:6px;">
-    <input data-role="none" type="checkbox" name="mqtt_enabled" <?= !empty($mw_cfg['mqtt_enabled']) ? 'checked' : '' ?>> Zustand per MQTT ver&ouml;ffentlichen
+    <input data-role="none" type="checkbox" name="mqtt_enabled" <?= !empty($mw_cfg['mqtt_enabled']) ? 'checked' : '' ?><?php echo mo_t('TEXT.ZUSTAND_PER_MQTT_VERFFENTLICHEN'); ?>
 </label>
-<div class="mw-row" style="margin-top:6px;">
+<div class="sm-row" style="margin-top:6px;">
     <div>
-        <label>Topic-Pr&auml;fix</label>
+        <label><?php echo mo_t('TEXT.TOPIC_PRFIX'); ?></label>
         <input data-role="none" type="text" name="mqtt_topic" value="<?= mw_e($mw_cfg['mqtt_topic']) ?>" placeholder="maeher">
-        <div class="mw-small">Ver&ouml;ffentlicht u.&nbsp;a. <span class="mw-mono"><?= mw_e($mw_cfg['mqtt_topic']) ?>/code</span>,
-        <span class="mw-mono">/status</span>, <span class="mw-mono">/batterie</span>, <span class="mw-mono">/maeht</span>,
-        <span class="mw-mono">/fehler</span>, <span class="mw-mono">/stunden</span>, <span class="mw-mono">/messer_rest</span>,
-        <span class="mw-mono">/temperatur</span>.</div>
+        <div class="sm-small"><?php echo mo_t('TEXT.VERFFENTLICHT_U_A'); ?> <span class="sm-mono"><?= mw_e($mw_cfg['mqtt_topic']) ?><?php echo mo_t('TEXT.CODE'); ?></span>,
+        <span class="sm-mono"><?php echo mo_t('TEXT.STATUS'); ?></span>, <span class="sm-mono"><?php echo mo_t('TEXT.BATTERIE'); ?></span>, <span class="sm-mono"><?php echo mo_t('TEXT.MAEHT'); ?></span>,
+        <span class="sm-mono"><?php echo mo_t('TEXT.FEHLER_2'); ?></span>, <span class="sm-mono"><?php echo mo_t('TEXT.STUNDEN'); ?></span>, <span class="sm-mono"><?php echo mo_t('TEXT.MESSER_REST'); ?></span>,
+        <span class="sm-mono"><?php echo mo_t('TEXT.TEMPERATUR'); ?></span>.</div>
     </div>
 </div>
 
-<button data-role="none" class="mw-btn" type="submit">Speichern</button>
+<button data-role="none" class="sm-btn" type="submit"><?php echo mo_t('TEXT.SPEICHERN'); ?></button>
 </form>
-<form method="post" style="margin-top:8px;">
+<form action="index.php" method="post" style="margin-top:8px;">
     <input data-role="none" type="hidden" name="bladereset" value="1">
     <input data-role="none" type="hidden" name="activetab" value="tab-settings">
-    <button data-role="none" class="mw-btn" type="submit" style="background:#607d8b;margin-top:0;">Messerwechsel quittieren</button>
+    <button data-role="none" class="sm-btn" type="submit" style="background:#607d8b;margin-top:0;"><?php echo mo_t('TEXT.MESSERWECHSEL_QUITTIEREN'); ?></button>
 </form>
 </div>
 
 <!-- ================= Einbindung in Loxone ================= -->
-<div class="mw-pane" id="tab-loxone">
-<h2>Einbindung in Loxone &mdash; Schritt f&uuml;r Schritt</h2>
-<p>Der Miniserver fragt <b>eine</b> Adresse ohne Zugangsdaten ab und bekommt fertige Zahlenwerte.
-Die Steuerung l&auml;uft &uuml;ber ebenso einfache Adressen &mdash; das Passwort bleibt im LoxBerry.</p>
+<div class="sm-pane" id="tab-loxone">
+<h2><?php echo mo_t('TEXT.EINBINDUNG_IN_LOXONE_SCHRITT_FR_SC'); ?></h2>
+<p><?php echo mo_t('TEXT.DER_MINISERVER_FRAGT'); ?> <b><?php echo mo_t('TEXT.EINE'); ?></b> <?php echo mo_t('TEXT.ADRESSE_OHNE_ZUGANGSDATEN_AB_UND_B'); ?></p>
 
-<div class="mw-step"><b>Schritt 1: Virtueller HTTP-Eingang &bdquo;Rasenm&auml;her&ldquo;</b> (Abfrage alle 30 s)
-<table class="mw-tbl">
+<div class="sm-step"><b><?php echo mo_t('TEXT.SCHRITT_1_VIRTUELLER_HTTP_EINGANG_'); ?></b> <?php echo mo_t('TEXT.ABFRAGE_ALLE_30_S'); ?>
+<table class="sm-tbl">
+<tr><th><?php echo mo_t('TEXT.EIGENSCHAFT'); ?></th><th><?php echo mo_t('TEXT.WERT'); ?></th></tr>
+<tr><td>URL</td><td><span class="sm-mono">http://<?= $mw_host ?><?php echo mo_t('TEXT.PLUGINS'); ?><?= mw_e($mw_plugin) ?><?php echo mo_t('TEXT.MOWER_PHP'); ?></span> <?php echo mo_t('TEXT.MHER_2'); ?> <span class="sm-mono"><?php echo mo_t('TEXT.DEV_2'); ?></span>)</td></tr>
+<tr><td><?php echo mo_t('TEXT.ABFRAGEZYKLUS'); ?></td><td><?php echo mo_t('TEXT.30_SEKUNDEN'); ?></td></tr>
+</table>
+<span class="sm-small"><?php echo mo_t('TEXT.DER_BISHERIGE_EINGANG_MIT'); ?> <span class="sm-mono"><?php echo mo_t('TEXT.USER_PASS'); ?></span> <?php echo mo_t('TEXT.KANN_DANACH_GELSCHT_WERDEN'); ?></span>
+</div>
+
+<div class="sm-step"><b><?php echo mo_t('TEXT.SCHRITT_2_BEFEHLSERKENNUNGEN'); ?></b>
+<table class="sm-tbl">
+<tr><th><?php echo mo_t('TEXT.BEFEHLSERKENNUNG'); ?></th><th><?php echo mo_t('TEXT.BEDEUTUNG'); ?></th></tr>
+<tr><td><span class="sm-mono"><?php echo mo_t('TEXT.ICODE_I_V'); ?></span></td><td><b><?php echo mo_t('TEXT.STATUS_2'); ?></b><?php echo mo_t('TEXT.1_PARKT_2_MHT_3_SUCHT_LADESTATION_'); ?></td></tr>
+<tr><td><span class="sm-mono"><?php echo mo_t('TEXT.IMODUS_I_V'); ?></span></td><td><?php echo mo_t('TEXT.BETRIEBSART_0_AUTOMATIK_1_MANUELL_'); ?></td></tr>
+<tr><td><span class="sm-mono"><?php echo mo_t('TEXT.IMAEHT_I_V'); ?></span> / <span class="sm-mono"><?php echo mo_t('TEXT.ILAEDT_I_V'); ?></span></td><td><?php echo mo_t('TEXT.1_MHT_GERADE_1_LDT_GERADE'); ?></td></tr>
+<tr><td><span class="sm-mono"><?php echo mo_t('TEXT.IBATT_I_V'); ?></span></td><td><?php echo mo_t('TEXT.AKKU_IN'); ?></td></tr>
+<tr><td><span class="sm-mono"><?php echo mo_t('TEXT.IFEHLER_I_V'); ?></span></td><td><?php echo mo_t('TEXT.FEHLERCODE_0_KEIN_FEHLER'); ?></td></tr>
+<tr><td><span class="sm-mono"><?php echo mo_t('TEXT.ISTUNDEN_I_V'); ?></span> / <span class="sm-mono"><?php echo mo_t('TEXT.IDAUER_I_V'); ?></span></td><td><?php echo mo_t('TEXT.BETRIEBSSTUNDEN_GESAMT_LAUFZEIT_DE'); ?></td></tr>
+<tr><td><span class="sm-mono"><?php echo mo_t('TEXT.IMESSER_I_V'); ?></span> / <span class="sm-mono"><?php echo mo_t('TEXT.IMESSERWARN_I_V'); ?></span></td><td><?php echo mo_t('TEXT.RESTSTUNDEN_BIS_ZUM_MESSERWECHSEL_'); ?></td></tr>
+<tr><td><span class="sm-mono"><?php echo mo_t('TEXT.ITEMP_I_V'); ?></span> / <span class="sm-mono"><?php echo mo_t('TEXT.IFEUCHTE_I_V'); ?></span> / <span class="sm-mono"><?php echo mo_t('TEXT.IWLAN_I_V'); ?></span></td><td><?php echo mo_t('TEXT.TEMPERATUR_FEUCHTE_IM_MODUL_WLAN_S'); ?></td></tr>
+<tr><td><span class="sm-mono"><?php echo mo_t('TEXT.IANN_I_V'); ?></span> / <span class="sm-mono"><?php echo mo_t('TEXT.IPUSH_I_V'); ?></span> / <span class="sm-mono"><?php echo mo_t('TEXT.IPTEST_I_V'); ?></span></td><td><?php echo mo_t('TEXT.MELDEFENSTER_PUSH_FREIGABE_TEST_PU'); ?></td></tr>
+<tr><td><span class="sm-mono"><?php echo mo_t('TEXT.IOK_I_V'); ?></span></td><td><?php echo mo_t('TEXT.1_MHER_ERREICHBAR'); ?></td></tr>
+</table>
+</div>
+
+<div class="sm-step"><b><?php echo mo_t('TEXT.SCHRITT_3_STEUERUNG_BER_EINEN_VIRT'); ?></b>
+<table class="sm-tbl">
 <tr><th>Eigenschaft</th><th>Wert</th></tr>
-<tr><td>URL</td><td><span class="mw-mono">http://<?= $mw_host ?>/plugins/<?= mw_e($mw_plugin) ?>/mower.php</span> (M&auml;her 2: <span class="mw-mono">?dev=2</span>)</td></tr>
-<tr><td>Abfragezyklus</td><td>30 Sekunden</td></tr>
+<tr><td><?php echo mo_t('TEXT.ADRESSE_VIRTUELLER_AUSGANG'); ?></td><td><span class="sm-mono">http://<?= $mw_host ?></span> <?php echo mo_t('TEXT.TEXT'); ?> <b><?php echo mo_t('TEXT.OHNE'); ?></b> <?php echo mo_t('TEXT.BENUTZER_UND_PASSWORT'); ?></td></tr>
 </table>
-<span class="mw-small">Der bisherige Eingang mit <span class="mw-mono">?user=...&amp;pass=...</span> kann danach gel&ouml;scht werden.</span>
+<table class="sm-tbl">
+<tr><th><?php echo mo_t('TEXT.BEFEHL_BEI_EIN'); ?></th><th><?php echo mo_t('TEXT.WIRKUNG'); ?></th></tr>
+<tr><td><span class="sm-mono">/plugins/<?= mw_e($mw_plugin) ?><?php echo mo_t('TEXT.MOWER_PHP_CMD_AUTO'); ?>&amp;token=<?= mw_e($mw_cfg['aktionstoken']) ?></span></td><td><?php echo mo_t('TEXT.AUTOMATIKBETRIEB_ZEITSTEUERUNG_DES'); ?></td></tr>
+<tr><td><span class="sm-mono">/plugins/<?= mw_e($mw_plugin) ?><?php echo mo_t('TEXT.MOWER_PHP_CMD_HOME'); ?>&amp;token=<?= mw_e($mw_cfg['aktionstoken']) ?></span></td><td><?php echo mo_t('TEXT.ZURCK_ZUR_LADESTATION_UND_DORT_BLE'); ?></td></tr>
+<tr><td><span class="sm-mono">/plugins/<?= mw_e($mw_plugin) ?><?php echo mo_t('TEXT.MOWER_PHP_CMD_MAN'); ?>&amp;token=<?= mw_e($mw_cfg['aktionstoken']) ?></span></td><td><?php echo mo_t('TEXT.HANDBETRIEB'); ?></td></tr>
+<tr><td><span class="sm-mono">/plugins/<?= mw_e($mw_plugin) ?><?php echo mo_t('TEXT.MOWER_PHP_CMD_EOD'); ?>&amp;token=<?= mw_e($mw_cfg['aktionstoken']) ?></span></td><td><?php echo mo_t('TEXT.BIS_FEIERABEND_MHEN_END_OF_DAY'); ?></td></tr>
+<tr><td><span class="sm-mono">/plugins/<?= mw_e($mw_plugin) ?><?php echo mo_t('TEXT.MOWER_PHP_CMD_START'); ?>&amp;token=<?= mw_e($mw_cfg['aktionstoken']) ?></span> / <span class="sm-mono"><?php echo mo_t('TEXT.CMD_STOP'); ?>&amp;token=...</span></td><td><?php echo mo_t('TEXT.SOFORT_STARTEN_BZW_ANHALTEN'); ?></td></tr>
+<tr><td><span class="sm-mono">/plugins/<?= mw_e($mw_plugin) ?><?php echo mo_t('TEXT.MOWER_PHP_CMD_BLADE_RESET'); ?>&amp;token=<?= mw_e($mw_cfg['aktionstoken']) ?></span></td><td><?php echo mo_t('TEXT.MESSERWECHSEL_QUITTIEREN_Z_B_BER_E'); ?></td></tr>
+</table>
+<div class="sm-alert sm-warn"><b>Token n&ouml;tig:</b> Der Endpunkt liegt unangemeldet und ist deshalb mit einem Token abgesichert &ndash; ohne passendes <span class="sm-mono">&amp;token=...</span> antwortet er mit HTTP 403 (siehe oben, aktuelles Token im n&auml;chsten Abschnitt).</div>
 </div>
 
-<div class="mw-step"><b>Schritt 2: Befehlserkennungen</b>
-<table class="mw-tbl">
-<tr><th>Befehlserkennung</th><th>Bedeutung</th></tr>
-<tr><td><span class="mw-mono">\iCODE=\i\v</span></td><td><b>Status</b>: 1 = parkt, 2 = m&auml;ht, 3 = sucht Ladestation, 4 = l&auml;dt, 5 = sucht, 7 = Fehler, 8 = Schleifensignal verloren, 16 = abgeschaltet, 17 = schl&auml;ft</td></tr>
-<tr><td><span class="mw-mono">\iMODUS=\i\v</span></td><td>Betriebsart: 0 = Automatik, 1 = Manuell, 2 = Zuhause, 4 = Auftrag</td></tr>
-<tr><td><span class="mw-mono">\iMAEHT=\i\v</span> / <span class="mw-mono">\iLAEDT=\i\v</span></td><td>1 = m&auml;ht gerade / 1 = l&auml;dt gerade</td></tr>
-<tr><td><span class="mw-mono">\iBATT=\i\v</span></td><td>Akku in %</td></tr>
-<tr><td><span class="mw-mono">\iFEHLER=\i\v</span></td><td>Fehlercode (0 = kein Fehler)</td></tr>
-<tr><td><span class="mw-mono">\iSTUNDEN=\i\v</span> / <span class="mw-mono">\iDAUER=\i\v</span></td><td>Betriebsstunden gesamt / Laufzeit des aktuellen Einsatzes in Minuten</td></tr>
-<tr><td><span class="mw-mono">\iMESSER=\i\v</span> / <span class="mw-mono">\iMESSERWARN=\i\v</span></td><td>Reststunden bis zum Messerwechsel / 1 = Wechsel f&auml;llig</td></tr>
-<tr><td><span class="mw-mono">\iTEMP=\i\v</span> / <span class="mw-mono">\iFEUCHTE=\i\v</span> / <span class="mw-mono">\iWLAN=\i\v</span></td><td>Temperatur, Feuchte im Modul, WLAN-Signal</td></tr>
-<tr><td><span class="mw-mono">\iANN=\i\v</span> / <span class="mw-mono">\iPUSH=\i\v</span> / <span class="mw-mono">\iPTEST=\i\v</span></td><td>Meldefenster / Push-Freigabe / Test-Push</td></tr>
-<tr><td><span class="mw-mono">\iOK=\i\v</span></td><td>1 = M&auml;her erreichbar</td></tr>
-</table>
-</div>
-
-<div class="mw-step"><b>Schritt 3: Steuerung &uuml;ber einen Virtuellen Ausgang</b>
-<table class="mw-tbl">
+<div class="sm-step"><b>Aktionstoken</b>
+<table class="sm-tbl">
 <tr><th>Eigenschaft</th><th>Wert</th></tr>
-<tr><td>Adresse (Virtueller Ausgang)</td><td><span class="mw-mono">http://<?= $mw_host ?></span> &mdash; <b>ohne</b> Benutzer und Passwort!</td></tr>
+<tr><td>Aktuelles Token</td><td><span class="sm-mono"><?= mw_e($mw_cfg['aktionstoken']) ?></span></td></tr>
 </table>
-<table class="mw-tbl">
-<tr><th>Befehl bei EIN</th><th>Wirkung</th></tr>
-<tr><td><span class="mw-mono">/plugins/<?= mw_e($mw_plugin) ?>/mower.php?cmd=auto</span></td><td>Automatikbetrieb (Zeitsteuerung des M&auml;hers)</td></tr>
-<tr><td><span class="mw-mono">/plugins/<?= mw_e($mw_plugin) ?>/mower.php?cmd=home</span></td><td>zur&uuml;ck zur Ladestation und dort bleiben</td></tr>
-<tr><td><span class="mw-mono">/plugins/<?= mw_e($mw_plugin) ?>/mower.php?cmd=man</span></td><td>Handbetrieb</td></tr>
-<tr><td><span class="mw-mono">/plugins/<?= mw_e($mw_plugin) ?>/mower.php?cmd=eod</span></td><td>bis Feierabend m&auml;hen (End of Day)</td></tr>
-<tr><td><span class="mw-mono">/plugins/<?= mw_e($mw_plugin) ?>/mower.php?cmd=start</span> / <span class="mw-mono">?cmd=stop</span></td><td>sofort starten bzw. anhalten</td></tr>
-<tr><td><span class="mw-mono">/plugins/<?= mw_e($mw_plugin) ?>/mower.php?cmd=blade_reset</span></td><td>Messerwechsel quittieren (z. B. &uuml;ber einen Taster in der App)</td></tr>
-</table>
+<div class="sm-knopfreihe sm-b-aktion">
+  <form method="post" action="index.php">
+    <input data-role="none" type="hidden" name="activetab" value="tab-loxone">
+    <button data-role="none" type="submit" name="token_neu" value="1">Neues Token erzeugen</button>
+  </form>
+</div>
+<div class="sm-legende">
+<span><i class="sm-punkt sm-b-aktion"></i> Aktion &ndash; &auml;ndert bestehende Loxone-Adressen</span>
+</div>
 </div>
 
-<div class="mw-step"><b>Schritt 4: Komplette Baustein-Liste zum 1:1-Nachbauen</b><br>
-<b>4a) Kacheln</b>
-<table class="mw-tbl">
-<tr><th>Baustein</th><th>Name</th><th>Einstellung</th><th>Eing&auml;nge</th></tr>
-<tr><td>Statusbaustein</td><td>M&auml;her-Zustand</td><td>Texte je Wert: 1 &bdquo;parkt&ldquo;, 2 &bdquo;m&auml;ht&ldquo;, 3 &bdquo;f&auml;hrt zur Station&ldquo;, 4 &bdquo;l&auml;dt&ldquo;, 7 &bdquo;St&ouml;rung&ldquo;, 8 &bdquo;Schleifensignal verloren&ldquo;</td><td>I1 &larr; CODE</td></tr>
-<tr><td>Analoganzeigen</td><td>Akku / Betriebsstunden / Messer-Reststunden</td><td>Einheiten <span class="mw-mono">&lt;v.0&gt; %</span>, <span class="mw-mono">&lt;v.0&gt; h</span></td><td>&larr; BATT, STUNDEN, MESSER</td></tr>
+<div class="sm-step"><b><?php echo mo_t('TEXT.SCHRITT_4_KOMPLETTE_BAUSTEIN_LISTE'); ?></b><br>
+<b><?php echo mo_t('TEXT.4A_KACHELN'); ?></b>
+<table class="sm-tbl">
+<tr><th><?php echo mo_t('TEXT.BAUSTEIN'); ?></th><th><?php echo mo_t('TEXT.NAME'); ?></th><th>Einstellung</th><th><?php echo mo_t('TEXT.EINGNGE'); ?></th></tr>
+<tr><td><?php echo mo_t('TEXT.STATUSBAUSTEIN'); ?></td><td><?php echo mo_t('TEXT.MHER_ZUSTAND'); ?></td><td><?php echo mo_t('TEXT.TEXTE_JE_WERT_1_PARKT_2_MHT_3_FHRT'); ?></td><td><?php echo mo_t('TEXT.I1_CODE'); ?></td></tr>
+<tr><td><?php echo mo_t('TEXT.ANALOGANZEIGEN'); ?></td><td><?php echo mo_t('TEXT.AKKU_BETRIEBSSTUNDEN_MESSER_RESTST'); ?></td><td><?php echo mo_t('TEXT.EINHEITEN'); ?> <span class="sm-mono">&lt;v.0&gt; %</span>, <span class="sm-mono">&lt;v.0&gt; h</span></td><td><?php echo mo_t('TEXT.BATT_STUNDEN_MESSER'); ?></td></tr>
 </table>
-<b>4b) Meldungen</b>
-<table class="mw-tbl">
+<b><?php echo mo_t('TEXT.4B_MELDUNGEN'); ?></b>
+<table class="sm-tbl">
 <tr><th>Baustein</th><th>Name</th><th>Einstellung</th><th>Eing&auml;nge</th></tr>
-<tr><td>Schwellwertschalter S1 / S2</td><td>Meldefenster / Push freigegeben</td><td>je Ein 0,5 / Aus 0,4</td><td>&larr; ANN bzw. PUSH</td></tr>
-<tr><td>UND U1 + ODER O1</td><td>M&auml;her-Meldung</td><td>O1 ist die einzige Quelle des Benachrichtigungs-Bausteins</td><td>U1: S1 &amp; S2</td></tr>
-<tr><td>Benachrichtigungs-Baustein</td><td>Push &bdquo;Rasenm&auml;her&ldquo;</td><td>Text z. B. &bdquo;Meldung vom Rasenm&auml;her &mdash; Details in der App&ldquo;</td><td>&larr; O1</td></tr>
-<tr><td>Schwellwertschalter S3</td><td>St&ouml;rung</td><td>Ein 0,5 an FEHLER &rarr; eigene Warnkachel</td><td>&larr; FEHLER</td></tr>
-<tr><td>Benachrichtigungs-Baustein 2</td><td>Test-Push</td><td>eigener Baustein NUR f&uuml;r den Test</td><td>&larr; Schwellwertschalter an PTEST</td></tr>
+<tr><td><?php echo mo_t('TEXT.SCHWELLWERTSCHALTER_S1_S2'); ?></td><td><?php echo mo_t('TEXT.MELDEFENSTER_PUSH_FREIGEGEBEN'); ?></td><td><?php echo mo_t('TEXT.JE_EIN_0_5_AUS_0_4'); ?></td><td><?php echo mo_t('TEXT.ANN_BZW_PUSH'); ?></td></tr>
+<tr><td><?php echo mo_t('TEXT.UND_U1_ODER_O1'); ?></td><td><?php echo mo_t('TEXT.MHER_MELDUNG'); ?></td><td><?php echo mo_t('TEXT.O1_IST_DIE_EINZIGE_QUELLE_DES_BENA'); ?></td><td><?php echo mo_t('TEXT.U1_S1_S2'); ?></td></tr>
+<tr><td><?php echo mo_t('TEXT.BENACHRICHTIGUNGS_BAUSTEIN'); ?></td><td><?php echo mo_t('TEXT.PUSH_RASENMHER'); ?></td><td><?php echo mo_t('TEXT.TEXT_Z_B_MELDUNG_VOM_RASENMHER_DET'); ?></td><td><?php echo mo_t('TEXT.O1'); ?></td></tr>
+<tr><td><?php echo mo_t('TEXT.SCHWELLWERTSCHALTER_S3'); ?></td><td><?php echo mo_t('TEXT.STRUNG'); ?></td><td><?php echo mo_t('TEXT.EIN_0_5_AN_FEHLER_EIGENE_WARNKACHE'); ?></td><td><?php echo mo_t('TEXT.FEHLER_3'); ?></td></tr>
+<tr><td><?php echo mo_t('TEXT.BENACHRICHTIGUNGS_BAUSTEIN_2'); ?></td><td><?php echo mo_t('TEXT.TEST_PUSH'); ?></td><td><?php echo mo_t('TEXT.EIGENER_BAUSTEIN_NUR_FR_DEN_TEST'); ?></td><td><?php echo mo_t('TEXT.SCHWELLWERTSCHALTER_AN_PTEST'); ?></td></tr>
 </table>
-<b>4c) Wetter- und Zeitsperren (der eigentliche Mehrwert der Automatisierung)</b>
-<table class="mw-tbl">
+<b><?php echo mo_t('TEXT.4C_WETTER_UND_ZEITSPERREN_DER_EIGE'); ?></b>
+<table class="sm-tbl">
 <tr><th>Baustein</th><th>Name</th><th>Einstellung</th><th>Eing&auml;nge</th></tr>
-<tr><td>UND U2</td><td>M&auml;hen sperren bei Regen</td><td>&rarr; auf <span class="mw-mono">?cmd=home</span>; Freigabe erst nach der Trocknungszeit wieder auf <span class="mw-mono">?cmd=auto</span></td><td>Regensensor &amp; (CODE = 2)</td></tr>
-<tr><td>UND U3</td><td>Ruhezeiten einhalten</td><td>&rarr; <span class="mw-mono">?cmd=home</span> zu Zeiten, in denen nicht gem&auml;ht werden soll (Sonn- und Feiertage!)</td><td>Zeitschaltuhr &amp; ggf. SCHULFREI/FEIERTAG aus dem Ferien-Plugin</td></tr>
-<tr><td>Schwellwertschalter S4 + Taster</td><td>Messerwechsel quittieren</td><td>Taster in der App &rarr; Virtueller Ausgang <span class="mw-mono">?cmd=blade_reset</span></td><td>&larr; MESSERWARN f&uuml;r die Warnkachel</td></tr>
+<tr><td><?php echo mo_t('TEXT.UND_U2'); ?></td><td><?php echo mo_t('TEXT.MHEN_SPERREN_BEI_REGEN'); ?></td><td><?php echo mo_t('TEXT.AUF'); ?> <span class="sm-mono"><?php echo mo_t('TEXT.CMD_HOME'); ?></span><?php echo mo_t('TEXT.FREIGABE_ERST_NACH_DER_TROCKNUNGSZ'); ?> <span class="sm-mono"><?php echo mo_t('TEXT.CMD_AUTO'); ?></span></td><td><?php echo mo_t('TEXT.REGENSENSOR_CODE_2'); ?></td></tr>
+<tr><td><?php echo mo_t('TEXT.UND_U3'); ?></td><td><?php echo mo_t('TEXT.RUHEZEITEN_EINHALTEN'); ?></td><td><?php echo mo_t('TEXT.TEXT_2'); ?> <span class="sm-mono">?cmd=home</span> <?php echo mo_t('TEXT.ZU_ZEITEN_IN_DENEN_NICHT_GEMHT_WER'); ?></td><td><?php echo mo_t('TEXT.ZEITSCHALTUHR_GGF_SCHULFREI_FEIERT'); ?></td></tr>
+<tr><td><?php echo mo_t('TEXT.SCHWELLWERTSCHALTER_S4_TASTER'); ?></td><td>Messerwechsel quittieren</td><td><?php echo mo_t('TEXT.TASTER_IN_DER_APP_VIRTUELLER_AUSGA'); ?> <span class="sm-mono">?cmd=blade_reset</span></td><td><?php echo mo_t('TEXT.MESSERWARN_FR_DIE_WARNKACHEL'); ?></td></tr>
 </table>
-<b>Praxis-Erfahrung:</b> Der Benachrichtigungs-Baustein sendet nur bei einer 0&rarr;1-Flanke &mdash; niemals mehrere
-Quellen direkt an den Eingang legen, immer erst im ODER sammeln. F&uuml;r den Test einen eigenen Baustein verwenden.
+<b><?php echo mo_t('TEXT.PRAXIS_ERFAHRUNG'); ?></b> <?php echo mo_t('TEXT.DER_BENACHRICHTIGUNGS_BAUSTEIN_SEN'); ?>
 </div>
 
-<div class="mw-step"><b>Schritt 5: MQTT und JSON</b><br>
-Alle Werte auch per MQTT (Reiter Einstellungen) und als JSON:
-<span class="mw-mono">http://<?= $mw_host ?>/plugins/<?= mw_e($mw_plugin) ?>/mower.php?json=1</span>
+<div class="sm-step"><b><?php echo mo_t('TEXT.SCHRITT_5_MQTT_UND_JSON'); ?></b><br>
+<?php echo mo_t('TEXT.ALLE_WERTE_AUCH_PER_MQTT_REITER_EI'); ?>
+<span class="sm-mono">http://<?= $mw_host ?>/plugins/<?= mw_e($mw_plugin) ?><?php echo mo_t('TEXT.MOWER_PHP_JSON_1'); ?></span>
 </div>
 </div>
 
 <!-- ================= Test ================= -->
-<div class="mw-pane" id="tab-test">
+<div class="sm-pane" id="tab-test">
 <h2>Test</h2>
-<div class="mw-legende">
-<span><i class="mw-punkt mw-b-lesen"></i> Ansehen &mdash; fragt nur ab, ver&auml;ndert nichts</span>
-<span><i class="mw-punkt mw-b-technik"></i> Technische Auskunft &mdash; f&uuml;r die Fehlersuche</span>
-<span><i class="mw-punkt mw-b-aktion"></i> L&ouml;st etwas aus &mdash; sendet oder ver&auml;ndert</span>
+<div class="sm-legende">
+<span><i class="sm-punkt sm-b-lesen"></i> <?php echo mo_t('LEGENDE.LESEN'); ?></span>
+<span><i class="sm-punkt sm-b-technik"></i> <?php echo mo_t('LEGENDE.TECHNIK'); ?></span>
+<span><i class="sm-punkt sm-b-aktion"></i> <?php echo mo_t('LEGENDE.AKTION'); ?></span>
 </div>
 
-<h3 class="mw-h3">Ansehen</h3>
-<div class="mw-knopfreihe">
-<a class="mw-btn mw-b-lesen"  href="/plugins/<?= mw_e($mw_plugin) ?>/mower.php" target="_blank">Loxone-Zeile abrufen</a>
-<a class="mw-btn mw-b-lesen"  href="/plugins/<?= mw_e($mw_plugin) ?>/mower.php?json=1" target="_blank">JSON-Ansicht</a>
+<h3 class="sm-h3"><?php echo mo_t('TEXT.ANSEHEN'); ?></h3>
+<div class="sm-knopfreihe">
+<a class="sm-btn sm-b-lesen"  href="/plugins/<?= mw_e($mw_plugin) ?>/mower.php" target="_blank"><?php echo mo_t('TEXT.LOXONE_ZEILE_ABRUFEN'); ?></a>
+<a class="sm-btn sm-b-lesen"  href="/plugins/<?= mw_e($mw_plugin) ?>/mower.php?json=1" target="_blank"><?php echo mo_t('TEXT.JSON_ANSICHT'); ?></a>
 </div>
 
-<h3 class="mw-h3">Technische Auskunft</h3>
-<div class="mw-knopfreihe">
-<a class="mw-btn mw-b-technik"  href="/plugins/<?= mw_e($mw_plugin) ?>/mower.php?debug=1&amp;refresh=1" target="_blank">Debug</a>
+<h3 class="sm-h3"><?php echo mo_t('TEXT.TECHNISCHE_AUSKUNFT'); ?></h3>
+<div class="sm-knopfreihe">
+<a class="sm-btn sm-b-technik"  href="/plugins/<?= mw_e($mw_plugin) ?>/mower.php?debug=1&amp;refresh=1" target="_blank"><?php echo mo_t('TEXT.DEBUG'); ?></a>
 </div>
 
-<h3 class="mw-h3">L&ouml;st etwas aus</h3>
-<div class="mw-knopfreihe">
-<a class="mw-btn mw-b-aktion"  href="/plugins/<?= mw_e($mw_plugin) ?>/mower.php?ptest=1" target="_blank">Test-Pushnachricht</a>
-<a class="mw-btn mw-b-aktion"  href="/plugins/<?= mw_e($mw_plugin) ?>/mower.php?cmd=auto" target="_blank">Automatik</a>
-<a class="mw-btn mw-b-aktion"  href="/plugins/<?= mw_e($mw_plugin) ?>/mower.php?cmd=home" target="_blank">Nach Hause</a>
-<a class="mw-btn mw-b-aktion"  href="/plugins/<?= mw_e($mw_plugin) ?>/mower.php?cmd=stop" target="_blank">Stopp</a>
+<h3 class="sm-h3"><?php echo mo_t('TEXT.LST_ETWAS_AUS'); ?></h3>
+<div class="sm-knopfreihe">
+<a class="sm-btn sm-b-aktion"  href="/plugins/<?= mw_e($mw_plugin) ?>/mower.php?ptest=1" target="_blank"><?php echo mo_t('TEXT.TEST_PUSHNACHRICHT'); ?></a>
+<a class="sm-btn sm-b-aktion"  href="/plugins/<?= mw_e($mw_plugin) ?>/mower.php?cmd=auto&amp;token=<?= mw_e($mw_cfg['aktionstoken']) ?>" target="_blank"><?php echo mo_t('TEXT.AUTOMATIK'); ?></a>
+<a class="sm-btn sm-b-aktion"  href="/plugins/<?= mw_e($mw_plugin) ?>/mower.php?cmd=home&amp;token=<?= mw_e($mw_cfg['aktionstoken']) ?>" target="_blank"><?php echo mo_t('TEXT.NACH_HAUSE'); ?></a>
+<a class="sm-btn sm-b-aktion"  href="/plugins/<?= mw_e($mw_plugin) ?>/mower.php?cmd=stop&amp;token=<?= mw_e($mw_cfg['aktionstoken']) ?>" target="_blank"><?php echo mo_t('TEXT.STOPP'); ?></a>
 </div>
 
 
-<div class="mw-small">&bdquo;Nach Hause&ldquo; ist der ungef&auml;hrlichste Test: Der M&auml;her f&auml;hrt zur Ladestation und bleibt dort,
-bis wieder auf Automatik gestellt wird.</div>
-<h2>Statuscodes im &Uuml;berblick</h2>
-<table class="mw-tbl"><tr><th>Code</th><th>Bedeutung</th><th>Code</th><th>Bedeutung</th></tr>
-<tr><td>0</td><td>Status wird ermittelt</td><td>7</td><td>Fehler</td></tr>
-<tr><td>1</td><td>parkt</td><td>8</td><td>Schleifensignal verloren</td></tr>
-<tr><td>2</td><td>m&auml;ht</td><td>16</td><td>abgeschaltet</td></tr>
-<tr><td>3</td><td>sucht die Ladestation</td><td>17</td><td>schl&auml;ft</td></tr>
-<tr><td>4</td><td>l&auml;dt</td><td>18</td><td>wird gewartet</td></tr>
-<tr><td>5</td><td>sucht</td><td>&minus;1</td><td>keine Verbindung</td></tr>
+<div class="sm-small"><?php echo mo_t('TEXT.NACH_HAUSE_IST_DER_UNGEFHRLICHSTE_'); ?></div>
+<h2><?php echo mo_t('TEXT.STATUSCODES_IM_UUML_BERBLICK'); ?></h2>
+<table class="sm-tbl"><tr><th><?php echo mo_t('TEXT.CODE_2'); ?></th><th>Bedeutung</th><th>Code</th><th>Bedeutung</th></tr>
+<tr><td>0</td><td><?php echo mo_t('TEXT.STATUS_WIRD_ERMITTELT'); ?></td><td>7</td><td><?php echo mo_t('TEXT.FEHLER_4'); ?></td></tr>
+<tr><td>1</td><td><?php echo mo_t('TEXT.PARKT'); ?></td><td>8</td><td><?php echo mo_t('TEXT.SCHLEIFENSIGNAL_VERLOREN'); ?></td></tr>
+<tr><td>2</td><td><?php echo mo_t('TEXT.MHT'); ?></td><td>16</td><td><?php echo mo_t('TEXT.ABGESCHALTET'); ?></td></tr>
+<tr><td>3</td><td><?php echo mo_t('TEXT.SUCHT_DIE_LADESTATION'); ?></td><td>17</td><td><?php echo mo_t('TEXT.SCHLFT'); ?></td></tr>
+<tr><td>4</td><td><?php echo mo_t('TEXT.LDT'); ?></td><td>18</td><td><?php echo mo_t('TEXT.WIRD_GEWARTET'); ?></td></tr>
+<tr><td>5</td><td><?php echo mo_t('TEXT.SUCHT'); ?></td><td><?php echo mo_t('TEXT.1'); ?></td><td>keine Verbindung</td></tr>
 </table>
 </div>
 
-<!-- ================= Protokoll ================= -->
-<div class="mw-pane" id="tab-log">
+<!-- ================= <?php echo mo_t('TEXT.PROTOKOLL'); ?> ================= -->
+<div class="sm-pane" id="tab-log">
 <h2>Protokoll</h2>
-<div class="mw-small" style="margin-bottom:8px;">Protokolliert werden Status&auml;nderungen, Meldungen und Steuerbefehle. Passw&ouml;rter werden vor dem Schreiben maskiert. Neueste Eintr&auml;ge oben (max. 300).<br>Datei: <span class="mw-mono"><?= mw_e($mw_logfile) ?></span></div>
+<div class="sm-small" style="margin-bottom:8px;"><?php echo mo_t('TEXT.PROTOKOLLIERT_WERDEN_STATUSNDERUNG'); ?><br><?php echo mo_t('TEXT.DATEI'); ?> <span class="sm-mono"><?= mw_e($mw_logfile) ?></span></div>
 <?php if ($mw_loglines) { ?>
-<div class="mw-log"><?= mw_e(implode("\n", $mw_loglines)) ?></div>
+<div class="sm-log"><?= mw_e(implode("\n", $mw_loglines)) ?></div>
 <?php } else { ?>
-<div class="mw-alert mw-info">Noch keine Protokoll-Eintr&auml;ge vorhanden.</div>
+<div class="sm-alert sm-info"><?php echo mo_t('TEXT.NOCH_KEINE_PROTOKOLL_EINTRGE_VORHA'); ?></div>
 <?php } ?>
-<form method="post" style="margin-top:10px;">
+<form action="index.php" method="post" style="margin-top:10px;">
     <input data-role="none" type="hidden" name="clearlog" value="1">
     <input data-role="none" type="hidden" name="activetab" value="tab-log">
-    <button data-role="none" class="mw-btn" type="submit" style="background:#c62828;">Protokoll leeren</button>
+    <button data-role="none" class="sm-btn" type="submit" style="background:#c62828;"><?php echo mo_t('TEXT.PROTOKOLL_LEEREN'); ?></button>
 </form>
 </div>
 
@@ -497,10 +539,10 @@ function mwTtsMode() {
     if (m === 'musicserver' && (!port.value || port.value === '80')) { port.value = 7091; }
 }
 (function () {
-    var tabs = document.querySelectorAll('.mw-tab');
+    var tabs = document.querySelectorAll('.sm-tab');
     function activate(id) {
-        tabs.forEach(function (t) { t.classList.toggle('mw-active', t.dataset.pane === id); });
-        document.querySelectorAll('.mw-pane').forEach(function (p) { p.classList.toggle('mw-active', p.id === id); });
+        tabs.forEach(function (t) { t.classList.toggle('sm-active', t.dataset.pane === id); });
+        document.querySelectorAll('.sm-pane').forEach(function (p) { p.classList.toggle('sm-active', p.id === id); });
     }
     tabs.forEach(function (t) { t.addEventListener('click', function () { activate(t.dataset.pane); }); });
     activate(<?= json_encode($mw_tab) ?>);

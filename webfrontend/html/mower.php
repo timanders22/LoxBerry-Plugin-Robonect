@@ -11,9 +11,11 @@
  *                       MODUS: 0=Automatik 1=Manuell 2=Zuhause 4=Auftrag
  *                       MESSER = Reststunden bis zum Messerwechsel
  *
- * Steuerung (einfache GET-Aufrufe fuer virtuelle Ausgaenge):
- *   ?cmd=auto | man | home | eod | start | stop
- *   ?cmd=blade_reset   Messerwechsel quittieren (Nullpunkt neu setzen)
+ * Steuerung (einfache GET-Aufrufe fuer virtuelle Ausgaenge; token-pflichtig):
+ *   ?cmd=auto | man | home | eod | start | stop &token=T
+ *   ?cmd=blade_reset&token=T   Messerwechsel quittieren (Nullpunkt neu setzen)
+ *   Ohne passendes Token aus dem Reiter "Einbindung in Loxone" antwortet
+ *   ?cmd= mit HTTP 403.
  *
  * Weitere Aufrufe: ?debug=1  ?json=1  ?refresh=1  ?ptest=1
  *
@@ -36,6 +38,14 @@ if (isset($_GET['json'])) {
 header('Content-Type: text/plain; charset=utf-8');
 
 if (isset($_GET['cmd'])) {
+    $mo_cfg_tok = mo_config();
+    $mo_soll = isset($mo_cfg_tok['aktionstoken']) ? (string) $mo_cfg_tok['aktionstoken'] : '';
+    $mo_ist = isset($_GET['token']) ? (string) $_GET['token'] : '';
+    if ($mo_soll === '' || !hash_equals($mo_soll, $mo_ist)) {
+        http_response_code(403);
+        echo "CMD;OK=0;ERR=TOKEN\n";
+        exit;
+    }
     if ($_GET['cmd'] === 'blade_reset') {
         $ok = mo_blade_reset($dev);
         echo 'CMD;OK=' . $ok . ";BEFEHL=blade_reset\n";
