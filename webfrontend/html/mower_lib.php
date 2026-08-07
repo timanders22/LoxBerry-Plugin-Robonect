@@ -243,7 +243,10 @@ function mo_blade_reset($dev = 1) {
     $raw = json_decode((string) @file_get_contents($p['config']), true);
     if (!is_array($raw)) { return 0; }
     $raw['blade_base'] = (int) $st['stunden'];
-    @file_put_contents($p['config'], json_encode($raw, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+    // json_encode liefert bei ungueltigem UTF-8 false, und file_put_contents
+    // schriebe dann eine Datei mit NULL Bytes - und meldete das als Erfolg.
+    $json_neu = json_encode($raw, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    if ($json_neu !== false) { @file_put_contents($p['config'], $json_neu); }
     @chmod($p['config'], 0600);
     @copy($p['config'], $p['backup']);
     @unlink(mo_tmpdir() . '/state_' . (int) $dev . '.json');

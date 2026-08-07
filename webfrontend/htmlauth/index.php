@@ -63,7 +63,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['token_neu'])) {
     $mw_cfg_tok['aktionstoken'] = function_exists('mo_token_erzeugen') ? mo_token_erzeugen() : bin2hex(random_bytes(12));
     if (!is_dir($mw_cfgdir)) { @mkdir($mw_cfgdir, 0775, true); }
     $mw_json_tok = json_encode($mw_cfg_tok, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-    if (@file_put_contents($mw_cfgfile, $mw_json_tok) !== false) {
+    // json_encode liefert bei ungueltigem UTF-8 false, und file_put_contents
+    // schriebe dann eine Datei mit NULL Bytes - und meldete das als Erfolg.
+    if ($mw_json_tok !== false && @file_put_contents($mw_cfgfile, $mw_json_tok) !== false) {
         @chmod($mw_cfgfile, 0600);
         @copy($mw_cfgfile, $mw_bkfile);
         @chmod($mw_bkfile, 0600);
@@ -117,7 +119,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save'])) {
     if ($mw_err === '') {
         if (!is_dir($mw_cfgdir)) { @mkdir($mw_cfgdir, 0775, true); }
         $mw_json = json_encode($mw_new, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-        if (@file_put_contents($mw_cfgfile, $mw_json) !== false) {
+        // json_encode liefert bei ungueltigem UTF-8 false, und file_put_contents
+        // schriebe dann eine Datei mit NULL Bytes - und meldete das als Erfolg.
+        if ($mw_json !== false && @file_put_contents($mw_cfgfile, $mw_json) !== false) {
             @chmod($mw_cfgfile, 0600);   // Zugangsdaten nur fuer den LoxBerry-Benutzer lesbar
             $mw_saved = true;
             @copy($mw_cfgfile, $mw_bkfile);
@@ -140,7 +144,9 @@ if (empty($mw_cfg['aktionstoken'])) {
     $mw_cfg['aktionstoken'] = function_exists('mo_token_erzeugen') ? mo_token_erzeugen() : bin2hex(random_bytes(12));
     if (!is_dir($mw_cfgdir)) { @mkdir($mw_cfgdir, 0775, true); }
     $mw_json_init = json_encode($mw_cfg, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-    if (@file_put_contents($mw_cfgfile, $mw_json_init) !== false) {
+    // json_encode liefert bei ungueltigem UTF-8 false, und file_put_contents
+    // schriebe dann eine Datei mit NULL Bytes - und meldete das als Erfolg.
+    if ($mw_json_init !== false && @file_put_contents($mw_cfgfile, $mw_json_init) !== false) {
         @chmod($mw_cfgfile, 0600);
         @copy($mw_cfgfile, $mw_bkfile);
         @chmod($mw_bkfile, 0600);
