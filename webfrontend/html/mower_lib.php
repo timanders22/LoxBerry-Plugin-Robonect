@@ -103,18 +103,62 @@ function mo_token_erzeugen($laenge = 24) {
 function mo_tmpdir() { $p = mo_paths(); if (!is_dir($p['tmp'])) { @mkdir($p['tmp'], 0775, true); } return $p['tmp']; }
 function mo_datadir() { $p = mo_paths(); if (!is_dir($p['data'])) { @mkdir($p['data'], 0775, true); } return $p['data']; }
 
+/**
+ * Die letzten $max Zeilen einer Datei - ohne sie ganz einzulesen.
+ *
+ * Bis 1.0.3 wurde das Protokoll mit file() vollstaendig in den Speicher
+ * geholt, umgedreht und abgeschnitten. Bei den 512 kB, ab denen gekuerzt
+ * wird, sind das rund 1,4 MB Spitzenspeicher.
+ *
+ * Der oft empfohlene Weg ueber das Programm "tail" spart zwar Speicher,
+ * ist aber wegen des zusaetzlichen Prozesses LANGSAMER als das, was er
+ * ersetzen soll. An einer 522-kB-Datei gemessen (200 Zeilen Ausgabe):
+ *
+ *     file() + array_reverse   0,8 ms   1436 KB
+ *     exec("tail -n 200")      1,7 ms     34 KB
+ *     rueckwaerts mit fseek    0,3 ms     34 KB
+ *
+ * Rueckwaerts lesen ist bei beidem besser und kommt ohne fremdes Programm
+ * aus. Rueckgabe in Dateireihenfolge (aelteste zuerst).
+ */
+function mo_log_tail($datei, $max = 200, $block = 8192) {
+    $fp = @fopen($datei, 'rb');
+    if (!$fp) { return array(); }
+    fseek($fp, 0, SEEK_END);
+    $rest = ftell($fp);
+    $puffer = '';
+    while ($rest > 0 && substr_count($puffer, "\n") <= $max) {
+        $lese = (int) min($block, $rest);
+        $rest -= $lese;
+        fseek($fp, $rest, SEEK_SET);
+        $puffer = fread($fp, $lese) . $puffer;
+    }
+    fclose($fp);
+    $zeilen = preg_split('/\R/', $puffer, -1, PREG_SPLIT_NO_EMPTY);
+    if (!is_array($zeilen)) { return array(); }
+    return array_slice($zeilen, -$max);
+}
+
 function mo_log($msg) {
     $p = mo_paths(); $f = $p['log'];
     if (!is_dir(dirname($f))) { @mkdir(dirname($f), 0775, true); }
+    clearstatcache(true, $f);
     if (is_file($f) && filesize($f) > 512000) {
-        $tail = array_slice(file($f, FILE_IGNORE_NEW_LINES) ?: array(), -200);
-        @file_put_contents($f, implode("\n", $tail) . "\n");
+        mo_write_atomic($f, implode("\n", mo_log_tail($f, 200)) . "\n");
     }
     // Sicherheitsnetz: falls je ein Passwort in eine Meldung geraet, wird es maskiert
+    /* Erst ab vier Zeichen maskieren.
+       Ein Passwort wie "a" oder "abc" haette sonst jedes Vorkommen dieser
+       Buchstabenfolge in JEDER Meldung durch *** ersetzt - aus
+       "Status=maeht Batterie=80%" waere bei Passwort "at" ein
+       "St***us=m***eht ..." geworden. Unter vier Zeichen ist die
+       Maskierung schaedlicher als der Schutz, den sie bringt; sie ist
+       ohnehin nur ein Sicherheitsnetz fuer den Fall, dass ein Passwort je
+       in eine Meldung geraet. */
     $cfg = mo_config();
     foreach ((array) $cfg['mowers'] as $m) {
         $pw = (string) (isset($m['pass']) ? $m['pass'] : '');
-        if ($pw !== '') { $msg = str_replace($pw, '***', $msg); }
+        if (strlen($pw) >= 4) { $msg = str_replace($pw, '***', $msg); }
     }
     @file_put_contents($f, '[' . date('Y-m-d H:i:s') . '] ' . $msg . "\n", FILE_APPEND);
 }
@@ -126,10 +170,63 @@ function mo_log_if_changed($key, $line) {
 
 /* ---------------- Zugriff auf das Robonect-Modul ---------------- */
 
-/** Ruft die JSON-Schnittstelle auf. Zugangsdaten per HTTP-Basic-Auth (nicht in der URL). */
-function mo_api($cmd, $dev = 1, $extra = '', $tmo = 8) {
+/* ==================================================================
+ * Zeitgrenzen - und warum ein stummer Maeher gemerkt wird
+ * ==================================================================
+ *
+ * Bis 1.0.3 wartete jeder Abruf 8 Sekunden. Nachgemessen gegen ein
+ * Gegenstueck, das die Verbindung annimmt und dann schweigt (der schlimmste
+ * Fall - ein abgeschaltetes Geraet weist die Verbindung sofort ab und kostet
+ * nichts):
+ *
+ *     ein einzelner mo_api()          8,0 s
+ *     mo_state() (status + health)   16,0 s   <- ZWEI Abrufe je Maeher
+ *     mo_events_check(), 2 Maeher    32,0 s
+ *     danach die Schleife im Cron     0,0 s   <- der Cache greift
+ *     mower.php mit leerem Cache     16,1 s   <- das sieht Loxone
+ *
+ * Drei Dinge folgen daraus:
+ *
+ * 1. Die 16 Sekunden je Maeher kommen nicht von einem langen Abruf, sondern
+ *    von ZWEI Abrufen: status und health. Faellt schon status aus, braucht
+ *    health gar nicht mehr versucht zu werden.
+ *
+ * 2. Die 16,1 Sekunden in mower.php sind der eigentliche Schaden. Ein
+ *    Loxone-Miniserver bricht einen virtuellen HTTP-Eingang nach wenigen
+ *    Sekunden ab - er bekommt also gar nichts, waehrend auf dem LoxBerry
+ *    ein Arbeiter blockiert ist.
+ *
+ * 3. Der Cron ruft NICHT doppelt ab. Die zweite Schleife kostet 0,0 s, weil
+ *    mo_state() das Ergebnis zwischenspeichert - auch das gescheiterte.
+ *
+ * Abhilfe: Zeitgrenze auf 3 Sekunden (ein Maeher im eigenen WLAN antwortet
+ * in unter 200 ms), health nur nach erfolgreichem status, und ein Merker
+ * fuer "antwortet gerade nicht". Solange der steht, kehrt mo_api sofort
+ * zurueck, statt erneut zu warten.
+ * ================================================================== */
+
+/** Wie lange ein stummer Maeher als stumm gilt, in Sekunden. */
+define('MO_STUMM_SEK', 60);
+
+/** Merker: antwortet dieser Maeher gerade nicht? */
+function mo_stumm($dev) {
+    $f = mo_tmpdir() . '/stumm_' . (int) $dev;
+    return (is_file($f) && time() - filemtime($f) < MO_STUMM_SEK) ? 1 : 0;
+}
+function mo_stumm_setzen($dev) { @touch(mo_tmpdir() . '/stumm_' . (int) $dev); }
+function mo_stumm_loeschen($dev) { @unlink(mo_tmpdir() . '/stumm_' . (int) $dev); }
+
+/**
+ * Ruft die JSON-Schnittstelle auf. Zugangsdaten per HTTP-Basic-Auth
+ * (nicht in der URL).
+ *
+ * $tmo ist die Zeitgrenze in Sekunden. 3 statt 8: siehe oben.
+ */
+function mo_api($cmd, $dev = 1, $extra = '', $tmo = 3) {
     $m = mo_mower($dev);
     if ($m === null) { return null; }
+    // Antwortet er gerade nicht, gar nicht erst warten.
+    if (mo_stumm($dev)) { return null; }
     $url = 'http://' . $m['ip'] . '/json?cmd=' . rawurlencode($cmd) . ($extra !== '' ? '&' . $extra : '');
     $head = "Accept: application/json\r\n";
     if ($m['user'] !== '' || $m['pass'] !== '') {
@@ -138,9 +235,40 @@ function mo_api($cmd, $dev = 1, $extra = '', $tmo = 8) {
     $ctx = stream_context_create(array('http' => array('timeout' => $tmo, 'header' => $head,
         'user_agent' => 'LoxBerry Robonect', 'ignore_errors' => true)));
     $r = @file_get_contents($url, false, $ctx);
-    if ($r === false) { return null; }
+    if ($r === false) {
+        mo_stumm_setzen($dev);
+        return null;
+    }
+    mo_stumm_loeschen($dev);
     $j = @json_decode($r, true);
     return is_array($j) ? $j : null;
+}
+
+/**
+ * Eine Datei unteilbar schreiben: Nebendatei, dann umbenennen.
+ *
+ * Der Cron schreibt den Zwischenspeicher, waehrend Loxone ueber mower.php
+ * liest. file_put_contents kuerzt die Datei zuerst auf null - der Leser
+ * bekommt dann eine halbe oder leere Datei und damit kaputtes JSON.
+ * rename() ist innerhalb eines Dateisystems unteilbar.
+ *
+ * Die Nebendatei traegt Prozessnummer UND Zufallszahl im Namen: ein fester
+ * Name waere derselbe Fehler eine Ebene tiefer, sobald zwei Schreiber
+ * gleichzeitig laufen.
+ */
+function mo_write_atomic($datei, $inhalt) {
+    if ($inhalt === false || $inhalt === null) { return false; }
+    $inhalt = (string) $inhalt;
+    $ordner = dirname($datei);
+    if (!is_dir($ordner) && !@mkdir($ordner, 0775, true) && !is_dir($ordner)) { return false; }
+    $tmp = $datei . '.' . getmypid() . '.' . mt_rand(1000, 9999) . '.tmp';
+    if (@file_put_contents($tmp, $inhalt) !== strlen($inhalt)) { @unlink($tmp); return false; }
+    @chmod($tmp, 0644);
+    if (!@rename($tmp, $datei)) { @unlink($tmp); return false; }
+    return true;
+}
+function mo_write_json($datei, $daten) {
+    return mo_write_atomic($datei, json_encode($daten));
 }
 
 /** Robonect-Statuscode -> Klartext. */
@@ -193,8 +321,10 @@ function mo_state($dev = 1, $force = false) {
         }
         if ($st['code'] === 7 && $st['fehler'] === 0) { $st['fehler'] = 1; }
     }
-    // Temperatur und Feuchte (eigener Aufruf, nicht bei jedem Modul vorhanden)
-    $h = mo_api('health', $dev);
+    /* Temperatur und Feuchte kommen aus einem ZWEITEN Abruf. Der wird nur
+       versucht, wenn der erste geklappt hat - sonst kostete ein stummer
+       Maeher die Zeitgrenze doppelt. Gemessen waren das 16 s statt 8. */
+    $h = ($st['ok'] === 1) ? mo_api('health', $dev) : null;
     if (is_array($h) && isset($h['health'])) {
         if (isset($h['health']['temperature'])) { $st['temperatur'] = round((float) $h['health']['temperature'], 1); }
         if (isset($h['health']['humidity'])) { $st['feuchte'] = round((float) $h['health']['humidity'], 1); }
@@ -206,7 +336,7 @@ function mo_state($dev = 1, $force = false) {
         $st['messer_rest'] = max(0, $iv - max(0, $st['stunden'] - $base));
         $st['messer_warn'] = $st['messer_rest'] <= 0 ? 1 : 0;
     }
-    file_put_contents($cache, json_encode($st));
+    mo_write_json($cache, $st);
     mo_log_if_changed('status_' . $dev, 'Status=' . $st['text'] . ' Modus=' . $st['modus_text']
         . ' Batterie=' . $st['batterie'] . '% Fehler=' . $st['fehler'] . ' Stunden=' . $st['stunden']);
     return $st;
@@ -368,7 +498,7 @@ function mo_events_check() {
             mo_log('Meldung: ' . $meldung);
             if (!empty($cfg['notify']['audio'])) { mo_say('Hallo! ' . $meldung); }
         }
-        @file_put_contents($f, json_encode(array('code' => $st['code'], 'ts' => time())));
+        mo_write_json($f, array('code' => $st['code'], 'ts' => time()));
     }
     foreach (array('messer_', 'akku_') as $pre) {
         foreach (glob(mo_tmpdir() . '/' . $pre . '*') ?: array() as $g) {

@@ -43,7 +43,13 @@ if ((!is_file($mw_cfgfile) || trim((string) @file_get_contents($mw_cfgfile)) ===
 }
 
 $mw_saved = false; $mw_err = ''; $mw_note = '';
-$mw_tab = preg_match('/^tab-(settings|loxone|test|log)$/', (string) (isset($_POST['activetab']) ? $_POST['activetab'] : '')) ? $_POST['activetab'] : 'tab-settings';
+/* Aktiver Reiter: aus dem abgesendeten Formular (activetab) oder aus der
+   Adresse (?form=...). Letzteres brauchen die Reiter, seit sie echte
+   Verweise sind. Die Positivliste MUSS jeden Reiter enthalten. */
+$mw_muster = '/^tab-(settings|loxone|test|log)$/';
+$mw_wunsch = isset($_POST['activetab']) ? (string) $_POST['activetab']
+    : (isset($_GET['form']) ? 'tab-' . (string) $_GET['form'] : '');
+$mw_tab = preg_match($mw_muster, $mw_wunsch) ? $mw_wunsch : 'tab-settings';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['clearlog'])) {
     @mkdir(dirname($mw_logfile), 0775, true);
@@ -161,7 +167,9 @@ $mw_states = array();
 foreach ($mw_list as $mw_k => $mw_r) { $mw_states[$mw_k] = mo_state($mw_k); }
 $mw_loglines = array();
 if (is_file($mw_logfile)) {
-    $mw_loglines = array_slice(array_reverse(file($mw_logfile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: array()), 0, 300);
+    // mo_log_tail() liest nur das Ende der Datei, nicht die ganze - siehe
+    // die Begruendung mit den Messwerten in mower_lib.php.
+    $mw_loglines = array_reverse(mo_log_tail($mw_logfile, 300));
 }
 
 function mw_e($s) { return htmlspecialchars((string) $s, ENT_QUOTES, 'UTF-8'); }
@@ -189,7 +197,7 @@ $mw_host = mw_e(isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : '<loxberr
 .sm-mono { font-family: ui-monospace, monospace; background: #f5f5f5; padding: 2px 6px; border-radius: 4px; }
 .sm-small { font-size: 0.82em; color: #666; margin-top: 3px; }
 .sm-tabs { display: flex; gap: 4px; margin: 14px 0 0; border-bottom: 2px solid #6dac20; flex-wrap: wrap; }
-.sm-tab { background: #eee; border: 1px solid #ccc; border-bottom: 0; border-radius: 8px 8px 0 0; padding: 9px 18px; cursor: pointer; font-size: 0.95em; color: #444 !important; text-shadow: none !important; }
+.sm-tab { background: #eee; border: 1px solid #ccc; border-bottom: 0; border-radius: 8px 8px 0 0; padding: 9px 18px; cursor: pointer; font-size: 0.95em; color: #444 !important; text-shadow: none !important; text-decoration: none !important; display: inline-block; }
 .sm-tab.sm-active { background: #6dac20; color: #fff !important; border-color: #6dac20; font-weight: 600; }
 .sm-pane { display: none; padding-top: 4px; }
 .sm-pane.sm-active { display: block; }
@@ -241,15 +249,34 @@ $mw_host = mw_e(isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : '<loxberr
 </div>
 <?php } ?>
 
+<?php
+/*
+ * Reiter als echte Verweise, sm-active vom SERVER.
+ *
+ * Bis 1.0.3 standen hier <div class="sm-tab"> ohne Verweis, und sm-active
+ * vergab allein das JavaScript am Seitenende. Da .sm-pane auf display:none
+ * steht, war die Seite ohne JavaScript vollstaendig leer - und die Reiter
+ * liessen sich nicht einmal anklicken, weil ein <div> kein Verweis ist.
+ *
+ * Diese Liste, die Positivliste in $mw_muster und die id der Flaechen
+ * muessen deckungsgleich bleiben - alle drei.
+ */
+$mw_reiter = array(
+    'tab-settings' => mo_t('REITER.EINSTELLUNGEN'),
+    'tab-loxone'   => mo_t('REITER.LOXONE'),
+    'tab-test'     => mo_t('REITER.TEST'),
+    'tab-log'      => mo_t('REITER.LOG'),
+);
+?>
 <div class="sm-tabs">
-    <div class="sm-tab" data-pane="tab-settings"><?php echo mo_t('REITER.EINSTELLUNGEN'); ?></div>
-    <div class="sm-tab" data-pane="tab-loxone"><?php echo mo_t('REITER.LOXONE'); ?></div>
-    <div class="sm-tab" data-pane="tab-test"><?php echo mo_t('REITER.TEST'); ?></div>
-    <div class="sm-tab" data-pane="tab-log"><?php echo mo_t('REITER.LOG'); ?></div>
+<?php foreach ($mw_reiter as $mw_id => $mw_bez) { ?>
+    <a class="sm-tab<?php echo $mw_tab === $mw_id ? ' sm-active' : ''; ?>" data-pane="<?php echo htmlspecialchars($mw_id, ENT_QUOTES, 'UTF-8'); ?>"
+       href="index.php?form=<?php echo htmlspecialchars(substr($mw_id, 4), ENT_QUOTES, 'UTF-8'); ?>"><?php echo $mw_bez; ?></a>
+<?php } ?>
 </div>
 
 <!-- ================= <?php echo mo_t('TEXT.EINSTELLUNG'); ?>en ================= -->
-<div class="sm-pane" id="tab-settings">
+<div class="sm-pane<?php echo $mw_tab === 'tab-settings' ? ' sm-active' : ''; ?>" id="tab-settings">
 <form action="index.php" method="post" autocomplete="off">
 <input data-role="none" type="hidden" name="save" value="1">
 <input data-role="none" type="hidden" name="activetab" value="tab-settings">
@@ -384,7 +411,7 @@ $mw_host = mw_e(isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : '<loxberr
 </div>
 
 <!-- ================= Einbindung in Loxone ================= -->
-<div class="sm-pane" id="tab-loxone">
+<div class="sm-pane<?php echo $mw_tab === 'tab-loxone' ? ' sm-active' : ''; ?>" id="tab-loxone">
 <h2><?php echo mo_t('TEXT.EINBINDUNG_IN_LOXONE_SCHRITT_FR_SC'); ?></h2>
 <p><?php echo mo_t('TEXT.DER_MINISERVER_FRAGT'); ?> <b><?php echo mo_t('TEXT.EINE'); ?></b> <?php echo mo_t('TEXT.ADRESSE_OHNE_ZUGANGSDATEN_AB_UND_B'); ?></p>
 
@@ -479,7 +506,7 @@ $mw_host = mw_e(isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : '<loxberr
 </div>
 
 <!-- ================= Test ================= -->
-<div class="sm-pane" id="tab-test">
+<div class="sm-pane<?php echo $mw_tab === 'tab-test' ? ' sm-active' : ''; ?>" id="tab-test">
 <h2>Test</h2>
 <div class="sm-legende">
 <span><i class="sm-punkt sm-b-lesen"></i> <?php echo mo_t('LEGENDE.LESEN'); ?></span>
@@ -520,7 +547,7 @@ $mw_host = mw_e(isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : '<loxberr
 </div>
 
 <!-- ================= <?php echo mo_t('TEXT.PROTOKOLL'); ?> ================= -->
-<div class="sm-pane" id="tab-log">
+<div class="sm-pane<?php echo $mw_tab === 'tab-log' ? ' sm-active' : ''; ?>" id="tab-log">
 <h2>Protokoll</h2>
 <div class="sm-small" style="margin-bottom:8px;"><?php echo mo_t('TEXT.PROTOKOLLIERT_WERDEN_STATUSNDERUNG'); ?><br><?php echo mo_t('TEXT.DATEI'); ?> <span class="sm-mono"><?= mw_e($mw_logfile) ?></span></div>
 <?php if ($mw_loglines) { ?>
@@ -550,7 +577,7 @@ function mwTtsMode() {
         tabs.forEach(function (t) { t.classList.toggle('sm-active', t.dataset.pane === id); });
         document.querySelectorAll('.sm-pane').forEach(function (p) { p.classList.toggle('sm-active', p.id === id); });
     }
-    tabs.forEach(function (t) { t.addEventListener('click', function () { activate(t.dataset.pane); }); });
+    tabs.forEach(function (t) { t.addEventListener('click', function (e) { e.preventDefault(); activate(t.dataset.pane); }); });
     activate(<?= json_encode($mw_tab) ?>);
     mwTtsMode();
 })();
