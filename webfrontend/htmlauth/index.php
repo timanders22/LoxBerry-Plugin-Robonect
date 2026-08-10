@@ -175,7 +175,7 @@ if (is_file($mw_logfile)) {
 function mw_e($s) { return htmlspecialchars((string) $s, ENT_QUOTES, 'UTF-8'); }
 
 $mw_frame = class_exists('LBWeb', false);
-if ($mw_frame) { LBWeb::lbheader('Rasenm&auml;her (Robonect)', 'https://wiki.loxberry.de/', ''); }
+if ($mw_frame) { LBWeb::lbheader('Rasenm&auml;her (Robonect)', 'https://wiki.loxberry.de/', 'help.html'); }
 $mw_host = mw_e(isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : '<loxberry-ip>');
 ?>
 <style>
@@ -465,7 +465,7 @@ $mw_reiter = array(
 <div class="sm-knopfreihe sm-b-aktion">
   <form method="post" action="index.php">
     <input data-role="none" type="hidden" name="activetab" value="tab-loxone">
-    <button data-role="none" type="submit" name="token_neu" value="1">Neues Token erzeugen</button>
+    <button data-role="none" type="submit" name="token_neu" value="1"><?php echo mo_t('TEXT.K_TOKEN_NEU'); ?></button>
   </form>
 </div>
 <div class="sm-legende">

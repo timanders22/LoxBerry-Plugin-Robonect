@@ -1,26 +1,26 @@
-<h2>Rasenmäher (Robonect)</h2>
+<h2><TMPL_VAR HILFE.K01></h2>
 
-<p>Bindet einen Mähroboter mit <b>Robonect-Modul</b> (HX/Hx+) an Loxone an — und nimmt dabei vor allem eines aus der Loxone-Projektdatei heraus: <b>das Passwort</b>.</p>
+<p><TMPL_VAR HILFE.K02></p>
 
-<p>Bisher übliche Praxis ist eine URL wie <code>http://mäher/xml?user=admin&amp;pass=geheim&amp;cmd=status</code> direkt im virtuellen Eingang. Damit steht das Klartext-Passwort in der Projektdatei, in jedem Backup und in jeder Datei, die man zur Fehlersuche weitergibt. Dieses Plugin hält die Zugangsdaten lokal (Dateirechte 0600, HTTP-Basic-Auth) — Loxone ruft nur noch <code>http://loxberry/plugins/robonect/mower.php</code> auf.</p>
+<p><TMPL_VAR HILFE.K03></p>
 
-<p>Kompatibel mit LoxBerry 3.x und <b>LoxBerry 4</b> (reines PHP, PHP 7.4 und 8.x).</p>
+<p><TMPL_VAR HILFE.K04></p>
 
-<h3>Funktionen</h3>
+<h3><TMPL_VAR HILFE.K05></h3>
 
-<ul><li>Status als <b>Zahl</b> (parkt, mäht, sucht Ladestation, lädt, Fehler, Schleifensignal verloren, abgeschaltet, schläft) plus Klartext</li><li>Betriebsart, Akku, Fehlercode und Fehlertext, Betriebsstunden, Laufzeit des aktuellen Einsatzes, Temperatur und Feuchte im Modul, WLAN-Signal</li><li><b>Messerwechsel-Überwachung</b>: Intervall in Betriebsstunden, Restlaufzeit, Warnung — Quittieren per Knopf oder <code>?cmd=blade_reset</code></li><li><b>Steuerung</b> per einfachem GET: <code>auto</code>, <code>man</code>, <code>home</code>, <code>eod</code>, <code>start</code>, <code>stop</code></li><li><b>Meldungen</b> als Ansage (TTS) und/oder Push: Störung, Schleifensignal verloren, Mähen beendet, Messerwechsel fällig, Akku unter 20 %</li><li>Bis zu <b>2 Mäher</b>, MQTT, JSON, Protokoll (Passwörter werden maskiert)</li><li>Reiter: Einstellungen, Einbindung in Loxone (mit kompletter Baustein-Liste inkl. Regen- und Ruhezeitensperre), Test, Protokoll</li></ul>
+<ul><li><TMPL_VAR HILFE.K06></li><li><TMPL_VAR HILFE.K07></li><li><TMPL_VAR HILFE.K08></li><li><TMPL_VAR HILFE.K09></li><li><TMPL_VAR HILFE.K10></li><li><TMPL_VAR HILFE.K11></li><li><TMPL_VAR HILFE.K12></li></ul>
 
-<h3>Endpunkte</h3>
+<h3><TMPL_VAR HILFE.K13></h3>
 
 <table class="sm-tbl">
-<tr><th>Aufruf</th><th>Zweck</th></tr>
-<tr><td><code>/plugins/robonect/mower.php</code></td><td>Loxone-Zeile <code>MOWER;OK=..;CODE=..;BATT=..;STUNDEN=..;MESSER=..;…</code></td></tr>
-<tr><td><code>/plugins/robonect/mower.php?debug=1</code></td><td>Klartext-Übersicht</td></tr>
-<tr><td><code>/plugins/robonect/mower.php?json=1</code></td><td>kompletter Zustand als JSON</td></tr>
-<tr><td><code>/plugins/robonect/mower.php?cmd=auto</code></td><td>Automatik (auch <code>man</code>, <code>home</code>, <code>eod</code>, <code>start</code>, <code>stop</code>)</td></tr>
-<tr><td><code>/plugins/robonect/mower.php?cmd=blade_reset</code></td><td>Messerwechsel quittieren</td></tr>
+<tr><th><TMPL_VAR HILFE.K19></th><th><TMPL_VAR HILFE.K20></th></tr>
+<tr><td><TMPL_VAR HILFE.K21></td><td><TMPL_VAR HILFE.K22></td></tr>
+<tr><td><TMPL_VAR HILFE.K23></td><td><TMPL_VAR HILFE.K24></td></tr>
+<tr><td><TMPL_VAR HILFE.K25></td><td><TMPL_VAR HILFE.K26></td></tr>
+<tr><td><TMPL_VAR HILFE.K27></td><td><TMPL_VAR HILFE.K28></td></tr>
+<tr><td><TMPL_VAR HILFE.K29></td><td><TMPL_VAR HILFE.K30></td></tr>
 </table>
 
-<h3>Sicherheit</h3>
+<h3><TMPL_VAR HILFE.K14></h3>
 
-<ul><li>Zugangsdaten ausschließlich in <code>config/plugins/robonect/mower.json</code> (Dateirechte 0600), Übertragung per HTTP-Basic-Auth statt in der URL</li><li>Das Passwortfeld zeigt den gespeicherten Wert nie an; leer lassen behält ihn</li><li>Vor dem Schreiben ins Protokoll werden Passwörter maskiert</li><li><b>Keine personenbezogenen Daten</b> im Plugin selbst</li></ul>
+<ul><li><TMPL_VAR HILFE.K15></li><li><TMPL_VAR HILFE.K16></li><li><TMPL_VAR HILFE.K17></li><li><TMPL_VAR HILFE.K18></li></ul>
