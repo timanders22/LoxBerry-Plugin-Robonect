@@ -18,8 +18,37 @@
 error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE);
 date_default_timezone_set('Europe/Berlin');
 
+
+/* Den LoxBerry-Wurzelordner ohne festen Systempfad bestimmen.
+ *
+ * Vom eigenen Ablageort aufwaerts, bis ein Verzeichnis gefunden ist, das
+ * config/plugins UND webfrontend enthaelt. Das trifft die uebliche
+ * Installation genauso wie eine an einem anderen Ort - und es trifft auch
+ * den Fall, dass das Plugin noch als entpacktes Archiv daliegt (dann findet
+ * es nichts und gibt einen Leerstring zurueck, was der Aufrufer ohnehin
+ * abfangen muss).
+ *
+ * Der Name traegt kein Plugin-Kuerzel und ist deshalb abgesichert: zwei
+ * Bibliotheken landen nie im selben Prozess, aber die Pruefung kostet nichts.
+ */
+if (!function_exists('lb_wurzel_ermitteln')) {
+    function lb_wurzel_ermitteln()
+    {
+        $d = __DIR__;
+        for ($i = 0; $i < 8; $i++) {
+            if (is_dir($d . '/config/plugins') && is_dir($d . '/webfrontend')) {
+                return $d;
+            }
+            $eltern = dirname($d);
+            if ($eltern === $d) { break; }
+            $d = $eltern;
+        }
+        return '';
+    }
+}
+
 function mo_paths() {
-    $lb = getenv('LBHOMEDIR') ?: (is_dir('/opt/loxberry') ? '/opt/loxberry' : '');
+    $lb = getenv('LBHOMEDIR') ?: lb_wurzel_ermitteln();
     $pd = getenv('LBPPLUGINDIR') ?: basename(__DIR__);
     if ($lb && is_dir($lb . '/config/plugins/' . $pd) === false) { $pd = 'robonect'; }
     if ($lb) {
@@ -386,6 +415,21 @@ function mo_blade_reset($dev = 1) {
 
 /* ---------------- MQTT ---------------- */
 
+/**
+ * Einen Wert fuer den UDP-Eingang des MQTT-Gateways unschaedlich machen.
+ *
+ * Das Gateway liest ZEILENWEISE. Ein Zeilenumbruch im Wert - aus einer
+ * Fehlermeldung des Betriebssystems, einem Geraetenamen oder der Ausgabe
+ * eines Systembefehls - zerlegt die Uebertragung, und aus den Bruchstuecken
+ * bildet das Gateway erfundene Themen. Ein Tabulator schadet ebenso, weil
+ * Leerzeichen Thema und Wert trennt.
+ */
+function mo_mqtt_wert_saeubern($v)
+{
+    $wert = str_replace(array("\r\n", "\r", "\n", "\t"), ' ', (string) $v);
+    return trim(preg_replace('/ {2,}/', ' ', $wert));
+}
+
 function mo_mqtt_publish($st = null, $dev = 1) {
     $cfg = mo_config();
     if (empty($cfg['mqtt_enabled'])) { return; }
@@ -407,7 +451,7 @@ function mo_mqtt_publish($st = null, $dev = 1) {
     $s = @socket_create(AF_INET, SOCK_DGRAM, SOL_UDP);
     if (!$s) { return; }
     foreach ($m as $k => $v) {
-        $msg = 'publish ' . $prefix . '/' . $k . ' ' . $v;
+        $msg = 'publish ' . $prefix . '/' . $k . ' ' . mo_mqtt_wert_saeubern($v);
         @socket_sendto($s, $msg, strlen($msg), 0, '127.0.0.1', $udp);
     }
     socket_close($s);
@@ -543,7 +587,7 @@ function mo_t($schluessel)
         // sich aus dem Ablageort dieser Datei.
         $home = getenv('LBHOMEDIR');
         if (!$home || !is_dir($home)) {
-            foreach (array('/opt/loxberry', '/home/loxberry/loxberry') as $k) {
+            foreach (array(lb_wurzel_ermitteln(), '/home/loxberry/loxberry') as $k) {
                 if (is_dir($k)) { $home = $k; break; }
             }
         }
