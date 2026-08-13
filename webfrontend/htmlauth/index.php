@@ -46,7 +46,7 @@ $mw_saved = false; $mw_err = ''; $mw_note = '';
 /* Aktiver Reiter: aus dem abgesendeten Formular (activetab) oder aus der
    Adresse (?form=...). Letzteres brauchen die Reiter, seit sie echte
    Verweise sind. Die Positivliste MUSS jeden Reiter enthalten. */
-$mw_muster = '/^tab-(settings|loxone|test|log)$/';
+$mw_muster = '/^tab-(settings|mqtt|loxone|test|log)$/';
 $mw_wunsch = isset($_POST['activetab']) ? (string) $_POST['activetab']
     : (isset($_GET['form']) ? 'tab-' . (string) $_GET['form'] : '');
 $mw_tab = preg_match($mw_muster, $mw_wunsch) ? $mw_wunsch : 'tab-settings';
@@ -97,6 +97,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['token_neu'])) {
     $mw_tab = 'tab-loxone';
 }
 
+// ---------- MQTT speichern (eigener Reiter seit 1.0.9, Hausstandard) ----------
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['mqtt_save'])) {
+    $mq_cfg = function_exists('mo_config') ? mo_config() : array();
+    if (!is_array($mq_cfg)) { $mq_cfg = array(); }
+    $mq_cfg['mqtt_enabled'] = isset($_POST['mqtt_enabled']) ? 1 : 0;
+    $mq_cfg['mqtt_topic'] = preg_replace('#[^\w/\-]#', '', (string) (isset($_POST['mqtt_topic']) ? $_POST['mqtt_topic'] : 'maeher')) ?: 'maeher';
+    if (!is_dir($mw_cfgdir)) { @mkdir($mw_cfgdir, 0775, true); }
+    $mq_json = json_encode($mq_cfg, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    if ($mq_json !== false && @file_put_contents($mw_cfgfile, $mq_json) !== false) {
+        @copy($mw_cfgfile, $mw_bkfile);
+    } else {
+        $mw_err = 'Konfiguration konnte nicht gespeichert werden: ' . $mw_cfgfile;
+    }
+    $mw_tab = 'tab-mqtt';
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save'])) {
     $mw_old = function_exists('mo_config') ? mo_config() : array('mowers' => array());
     $mw_new = array();
@@ -118,8 +134,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save'])) {
     $mw_new['cache_sec'] = max(5, min(300, (int) (isset($_POST['cache_sec']) ? $_POST['cache_sec'] : 20)));
     $mw_new['blade_hours'] = max(1, min(2000, (int) (isset($_POST['blade_hours']) ? $_POST['blade_hours'] : 200)));
     $mw_new['blade_base'] = max(0, min(100000, (int) (isset($_POST['blade_base']) ? $_POST['blade_base'] : 0)));
-    $mw_new['mqtt_enabled'] = isset($_POST['mqtt_enabled']) ? 1 : 0;
-    $mw_new['mqtt_topic'] = preg_replace('#[^\w/\-]#', '', (string) (isset($_POST['mqtt_topic']) ? $_POST['mqtt_topic'] : 'maeher')) ?: 'maeher';
+        // Aus dem Bestand uebernehmen, was dieses Formular nicht mitschickt.
+    // BIS 1.0.8 FEHLTE DAS FUER aktionstoken: jedes Speichern der Einstellungen
+    // warf das Token still weg, der naechste Seitenaufruf erzeugte ein NEUES -
+    // und alle Loxone-Adressen liefen auf 403.
+    // MQTT wohnt seit 1.0.9 im eigenen Reiter (Hausstandard).
+    $alt_cfg = function_exists('mo_config') ? mo_config() : array();
+    if (!is_array($alt_cfg)) { $alt_cfg = array(); }
+    $mw_new['aktionstoken'] = isset($alt_cfg['aktionstoken']) ? (string) $alt_cfg['aktionstoken'] : '';
+    $mw_new['mqtt_enabled'] = isset($alt_cfg['mqtt_enabled']) ? (int) $alt_cfg['mqtt_enabled'] : 0;
+    $mw_new['mqtt_topic'] = isset($alt_cfg['mqtt_topic']) && $alt_cfg['mqtt_topic'] !== '' ? $alt_cfg['mqtt_topic'] : 'maeher';
     $mw_new['notify'] = array(
         'audio' => isset($_POST['notify_audio']) ? 1 : 0,
         'push' => isset($_POST['notify_push']) ? 1 : 0,
@@ -241,6 +265,8 @@ $mw_host = mw_e(isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : '<loxberr
 .sm-info { background: #e3f2fd; border: 1px solid #90caf9; font-size: 0.9em; }
 .sm-mono { font-family: ui-monospace, monospace; background: #f5f5f5; padding: 2px 6px; border-radius: 4px; }
 .sm-small { font-size: 0.82em; color: #666; margin-top: 3px; }
+.sm-hinweis { border: 1px solid #cfe3b0; background: #f2f8ea; border-radius: 6px;
+    padding: 10px 12px; margin: 12px 0; font-size: 0.9em; }
 .sm-tabs { display: flex; gap: 4px; margin: 14px 0 0; border-bottom: 2px solid #6dac20; flex-wrap: wrap; }
 .sm-tab { background: #eee; border: 1px solid #ccc; border-bottom: 0; border-radius: 8px 8px 0 0; padding: 9px 18px; cursor: pointer; font-size: 0.95em; color: #444 !important; text-shadow: none !important; text-decoration: none !important; display: inline-block; }
 .sm-tab.sm-active { background: #6dac20; color: #fff !important; border-color: #6dac20; font-weight: 600; }
@@ -308,6 +334,7 @@ $mw_host = mw_e(isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : '<loxberr
  */
 $mw_reiter = array(
     'tab-settings' => mo_t('REITER.EINSTELLUNGEN'),
+    'tab-mqtt'     => mo_t('REITER.MQTT'),
     'tab-loxone'   => mo_t('REITER.LOXONE'),
     'tab-test'     => mo_t('REITER.TEST'),
     'tab-log'      => mo_t('REITER.LOG'),
@@ -431,6 +458,21 @@ $mw_reiter = array(
     <?php echo mo_t('TEXT.DER_ORIGINALE_LOXONE_AUDIOSERVER_B'); ?> <span class="sm-mono">ANN=1</span>.
 </div>
 
+<button data-role="none" class="sm-btn" type="submit"><?php echo mo_t('TEXT.SPEICHERN'); ?></button>
+</form>
+<form action="index.php" method="post" style="margin-top:8px;">
+    <input data-role="none" type="hidden" name="bladereset" value="1">
+    <input data-role="none" type="hidden" name="activetab" value="tab-settings">
+    <button data-role="none" class="sm-btn" type="submit" style="background:#607d8b;margin-top:0;"><?php echo mo_t('TEXT.MESSERWECHSEL_QUITTIEREN'); ?></button>
+</form>
+</div>
+
+<!-- ================= Einbindung in Loxone ================= -->
+<!-- ================= Reiter: MQTT (eigener Reiter seit 1.0.9, Hausstandard) ================= -->
+<div class="sm-pane<?php echo $mw_tab === 'tab-mqtt' ? ' sm-active' : ''; ?>" id="tab-mqtt">
+<form action="index.php" method="post">
+<input data-role="none" type="hidden" name="mqtt_save" value="1">
+<input data-role="none" type="hidden" name="activetab" value="tab-mqtt">
 <h2><?php echo mo_t('TEXT.MQTT_OPTIONAL'); ?></h2>
 <?php if (function_exists('mo_mqtt_gateway_autostart') && mo_mqtt_gateway_autostart() === false) { ?><div class="sm-alert sm-warn"><b>MQTT:</b> <?php echo mo_t('TEXT.W_AUTOSTART'); ?></div><?php } ?>
 <label style="display:inline-flex;align-items:center;gap:6px;">
@@ -449,14 +491,8 @@ $mw_reiter = array(
 
 <button data-role="none" class="sm-btn" type="submit"><?php echo mo_t('TEXT.SPEICHERN'); ?></button>
 </form>
-<form action="index.php" method="post" style="margin-top:8px;">
-    <input data-role="none" type="hidden" name="bladereset" value="1">
-    <input data-role="none" type="hidden" name="activetab" value="tab-settings">
-    <button data-role="none" class="sm-btn" type="submit" style="background:#607d8b;margin-top:0;"><?php echo mo_t('TEXT.MESSERWECHSEL_QUITTIEREN'); ?></button>
-</form>
 </div>
 
-<!-- ================= Einbindung in Loxone ================= -->
 <div class="sm-pane<?php echo $mw_tab === 'tab-loxone' ? ' sm-active' : ''; ?>" id="tab-loxone">
 <h2><?php echo mo_t('TEXT.EINBINDUNG_IN_LOXONE_SCHRITT_FR_SC'); ?></h2>
 <p><?php echo mo_t('TEXT.DER_MINISERVER_FRAGT'); ?> <b><?php echo mo_t('TEXT.EINE'); ?></b> <?php echo mo_t('TEXT.ADRESSE_OHNE_ZUGANGSDATEN_AB_UND_B'); ?></p>
