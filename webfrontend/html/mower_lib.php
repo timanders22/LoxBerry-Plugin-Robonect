@@ -615,3 +615,131 @@ function mo_t($schluessel)
     list($a, $s) = array_pad(explode('.', $schluessel, 2), 2, '');
     return isset($texte[$a][$s]) ? $texte[$a][$s] : $schluessel;
 }
+
+/* ---------------- Loxone-Vorlage (Hausstandard "Alles auf einmal anlegen") ---------------- */
+/** name => array(analog, min, max, einheit, kommentar) */
+function mo_felder() {
+    return array(
+        'OK'         => array(0, 0, 1,    '',    '1 = Maeher erreichbar'),
+        'CODE'       => array(1, 0, 99,   '',    'Statuszahl des Maehers (Robonect-Status)'),
+        'MODUS'      => array(1, 0, 99,   '',    'Betriebsmodus (Auto, Manuell, Zuhause, ...)'),
+        'BATT'       => array(1, 0, 100,  '%',   'Batterie in Prozent'),
+        'MAEHT'      => array(0, 0, 1,    '',    '1 = maeht gerade'),
+        'LAEDT'      => array(0, 0, 1,    '',    '1 = laedt gerade'),
+        'FEHLER'     => array(1, 0, 10000,'',    'Fehlercode (0 = kein Fehler)'),
+        'STUNDEN'    => array(1, 0, 100000,'h',  'Maehstunden gesamt'),
+        'DAUER'      => array(1, 0, 10000,'min', 'Dauer des laufenden Einsatzes'),
+        'MESSER'     => array(1, 0, 10000,'h',   'Messer: Stunden seit Wechsel'),
+        'MESSERWARN' => array(0, 0, 1,    '',    '1 = Messerwechsel faellig'),
+        'TEMP'       => array(1, -30, 80, 'GradC','Temperatur am Maeher'),
+        'FEUCHTE'    => array(1, 0, 100,  '%',   'Luftfeuchte am Maeher'),
+        'WLAN'       => array(1, -100, 0, 'dBm', 'WLAN-Signalstaerke'),
+        'TIMER'      => array(0, 0, 1,    '',    '1 = Timer aktiv'),
+        'ANN'        => array(0, 0, 1,    '',    'Meldefenster aktiv'),
+        'AUDIO'      => array(0, 0, 1,    '',    'Ansage freigegeben'),
+        'PUSH'       => array(0, 0, 1,    '',    'Push freigegeben'),
+        'PTEST'      => array(0, 0, 1,    '',    'Test-Push ausloesen'),
+    );
+}
+/** Gepruefter PHP-Nachbau des LoxoneTemplateBuilder - Attributreihenfolge,
+ *  CRLF und der Tabulator vor den Kindelementen entsprechen dem Original.
+ *  Uebernommen aus LoxBerry-Plugin-APC-UPS, nur das Kuerzel getauscht. */
+function mo_xml_virtual_in_http($kopf, $cmds) {
+    $crlf = "\r\n";
+    $o = '<?xml version="1.0" encoding="utf-8"?>' . $crlf;
+    $o .= '<VirtualInHttp HintText="" ';
+    $o .= 'Title="' . mo_x($kopf['title']) . '" ';
+    $o .= 'Comment="' . mo_x(isset($kopf['comment']) ? $kopf['comment'] : '') . '" ';
+    $o .= 'Address="' . mo_x(isset($kopf['address']) ? $kopf['address'] : '') . '" ';
+    $o .= 'PollingTime="' . mo_x(isset($kopf['polling']) ? $kopf['polling'] : '60') . '"';
+    $o .= '>' . $crlf;
+    $o .= "\t" . '<Info templateType="2" minVersion="17010727"/>' . $crlf; // wie Original-Export aus Loxone Config 17.1
+    foreach ($cmds as $c) {
+        $o .= "\t" . '<VirtualInHttpCmd ';
+        $o .= 'Title="' . mo_x($c['title']) . '" ';
+        $o .= 'Comment="' . mo_x($c['comment']) . '" ';
+        $o .= 'Check="' . mo_x($c['check']) . '" ';
+        $o .= 'Signed="' . ($c['min'] < 0 ? 'true' : 'false') . '" ';
+        $o .= 'Analog="' . ($c['analog'] ? 'true' : 'false') . '" ';
+        $o .= 'SourceValLow="0" DestValLow="0" SourceValHigh="1" DestValHigh="1" DefVal="0" ';
+        $o .= 'MinVal="' . (int) $c['min'] . '" ';
+        $o .= 'MaxVal="' . (int) $c['max'] . '" ';
+        $o .= 'Unit="' . mo_x(isset($c['unit']) ? $c['unit'] : '<v>') . '" ';
+        $o .= 'HintText=""';
+        $o .= '/>' . $crlf;
+    }
+    $o .= '</VirtualInHttp>' . $crlf;
+    return $o;
+}
+
+function mo_x($s) {
+    return htmlspecialchars((string) $s, ENT_QUOTES | ENT_XML1, 'UTF-8');
+}
+
+/** Hausstandard: Gateway-Autostart aus general.json (PLUGIN_HAUSREGELN Abschnitt 3). */
+function mo_mqtt_gateway_autostart() {
+    $p = mo_paths();
+    $home = isset($p['lbhome']) && $p['lbhome'] !== '' ? $p['lbhome'] : (getenv('LBHOMEDIR') ?: '/opt/loxberry');
+    $gj = $home . '/config/system/general.json';
+    if (!is_file($gj)) { return null; }
+    $d = json_decode((string) @file_get_contents($gj), true);
+    if (!is_array($d) || !isset($d['Mqtt'])) { return null; }
+    return !empty($d['Mqtt']['Gatewayautostart']);
+}
+
+/** Vorlage fuer den Import in Loxone Config. Rueckgabe: array(name, inhalt) */
+function mo_vorlage($dev = 1) {
+    $host = isset($_SERVER['HTTP_HOST']) && $_SERVER['HTTP_HOST'] !== ''
+        ? preg_replace('/[^A-Za-z0-9\.\-:]/', '', (string) $_SERVER['HTTP_HOST'])
+        : (gethostname() ?: 'loxberry');
+    $ordner = getenv('LBPPLUGINDIR') ?: 'robonect';
+    $dev = max(1, min(9, (int) $dev));
+    $cmds = array();
+    foreach (mo_felder() as $name => $f) {
+        list($analog, $min, $max, $einheit, $text) = $f;
+        $cmds[] = array(
+            'title' => 'MOWER_' . $name . ($dev > 1 ? '_' . $dev : ''),
+            'comment' => $text . ($einheit !== '' ? ' [' . $einheit . ']' : ''),
+            'check' => '\i' . $name . '=\i\v',
+            'unit' => ($einheit !== '' ? '<v.1> ' . $einheit : '<v.1>'),
+            'analog' => $analog, 'min' => $min, 'max' => $max,
+        );
+    }
+    return array('VI_robonect' . ($dev > 1 ? '_' . $dev : '') . '.xml', mo_xml_virtual_in_http(array(
+        'title' => 'Rasenmaeher' . ($dev > 1 ? ' ' . $dev : ''),
+        'address' => 'http://' . $host . '/plugins/' . $ordner . '/mower.php' . ($dev > 1 ? '?dev=' . $dev : ''),
+        'polling' => '60',
+        'comment' => 'Erzeugt vom LoxBerry-Plugin Rasenmaeher/Robonect (' . date('d.m.Y') . '). '
+                   . 'Loxone Config legt beim Import neu an und ueberschreibt nichts - '
+                   . 'zweimal eingelesen ergibt doppelte Bausteine.',
+    ), $cmds));
+}
+
+/** Vorlage der Steuerbefehle (Virtueller Ausgang) - Format wie Original-Export aus Loxone Config 17.1. */
+function mo_vo_vorlage() {
+    $host = isset($_SERVER['HTTP_HOST']) && $_SERVER['HTTP_HOST'] !== ''
+        ? preg_replace('/[^A-Za-z0-9\.\-:]/', '', (string) $_SERVER['HTTP_HOST'])
+        : (gethostname() ?: 'loxberry');
+    $ordner = getenv('LBPPLUGINDIR') ?: 'robonect';
+    $cfg = mo_config();
+    $tok = isset($cfg['aktionstoken']) ? (string) $cfg['aktionstoken'] : '';
+    $crlf = "\r\n";
+    $o = '<?xml version="1.0" encoding="utf-8"?>' . $crlf;
+    $o .= '<VirtualOut HintText="" Title="Rasenmaeher steuern (LoxBerry-Plugin)" Comment="Steuerbefehle ueber das Plugin ' . mo_x($ordner) . ' - enthaelt das Aktionstoken." Address="http://' . mo_x($host) . '" CmdInit="" CloseAfterSend="true" CmdSep="">' . $crlf;
+    $o .= "\t" . '<Info templateType="3" minVersion="17010727"/>' . $crlf;
+    foreach (array(
+        array('Maeher starten', '/mower.php?cmd=start', false),
+        array('Maeher stoppen', '/mower.php?cmd=stop', false),
+        array('Automatik', '/mower.php?cmd=auto', false),
+        array('Zur Ladestation', '/mower.php?cmd=home', false),
+        array('Ende des Tages', '/mower.php?cmd=eod', false),
+        array('Messerwechsel quittieren', '/mower.php?cmd=blade_reset', false),
+    ) as $c) {
+        $o .= "\t" . '<VirtualOutCmd Title="' . mo_x($c[0]) . '" Comment="" CmdOnMethod="GET" CmdOffMethod="GET" ';
+        $o .= 'CmdOn="' . mo_x('/plugins/' . $ordner . $c[1] . '&token=' . $tok) . '" ';
+        $o .= 'CmdOnHTTP="" CmdOnPost="" CmdOff="" CmdOffHTTP="" CmdOffPost="" CmdAnswer="" ';
+        $o .= 'Analog="' . (!empty($c[2]) ? 'true' : 'false') . '" Repeat="0" RepeatRate="0" HintText=""/>' . $crlf;
+    }
+    $o .= '</VirtualOut>' . $crlf;
+    return array('VQ_robonect_steuern.xml', $o);
+}

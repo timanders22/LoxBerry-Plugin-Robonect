@@ -51,6 +51,22 @@ $mw_wunsch = isset($_POST['activetab']) ? (string) $_POST['activetab']
     : (isset($_GET['form']) ? 'tab-' . (string) $_GET['form'] : '');
 $mw_tab = preg_match($mw_muster, $mw_wunsch) ? $mw_wunsch : 'tab-settings';
 
+// ---------- Loxone-Vorlage herunterladen (Hausstandard) ----------
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['vorlage_vo']) && function_exists('mo_vo_vorlage')) {
+    list($mw_vname, $mw_vinhalt) = mo_vo_vorlage();
+    header('Content-Type: application/x-download');
+    header('Content-Disposition: attachment; filename="' . $mw_vname . '"');
+    echo $mw_vinhalt;
+    exit;
+}
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['vorlage']) && function_exists('mo_vorlage')) {
+    list($mw_vname, $mw_vinhalt) = mo_vorlage(isset($_POST['vorlage_dev']) ? (int) $_POST['vorlage_dev'] : 1);
+    header('Content-Type: application/x-download');
+    header('Content-Disposition: attachment; filename="' . $mw_vname . '"');
+    echo $mw_vinhalt;
+    exit;
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['clearlog'])) {
     @mkdir(dirname($mw_logfile), 0775, true);
     @file_put_contents($mw_logfile, '[' . date('Y-m-d H:i:s') . "] Protokoll geleert (Admin-Oberflaeche)\n");
@@ -416,6 +432,7 @@ $mw_reiter = array(
 </div>
 
 <h2><?php echo mo_t('TEXT.MQTT_OPTIONAL'); ?></h2>
+<?php if (function_exists('mo_mqtt_gateway_autostart') && mo_mqtt_gateway_autostart() === false) { ?><div class="sm-alert sm-warn"><b>MQTT:</b> <?php echo mo_t('TEXT.W_AUTOSTART'); ?></div><?php } ?>
 <label style="display:inline-flex;align-items:center;gap:6px;">
     <input data-role="none" type="checkbox" name="mqtt_enabled" <?= !empty($mw_cfg['mqtt_enabled']) ? 'checked' : '' ?><?php echo mo_t('TEXT.ZUSTAND_PER_MQTT_VERFFENTLICHEN'); ?>
 </label>
@@ -501,6 +518,19 @@ $mw_reiter = array(
 <span><i class="sm-punkt sm-b-aktion"></i> Aktion &ndash; &auml;ndert bestehende Loxone-Adressen</span>
 </div>
 </div>
+
+<h2><?php echo mo_t('TEXT.H_VORLAGE'); ?></h2>
+<div class="sm-hinweis"><?php echo mo_t('TEXT.H_VORLAGE_TEXT'); ?></div>
+<form action="index.php" method="post" style="margin-bottom:14px;">
+  <input data-role="none" type="hidden" name="activetab" value="tab-loxone">
+  <input data-role="none" type="hidden" name="vorlage" value="1">
+  <button data-role="none" class="sm-btn" type="submit" style="background:#546e7a;"><?php echo mo_t('TEXT.K_VORLAGE'); ?></button>
+</form>
+<form action="index.php" method="post" style="margin-bottom:14px;">
+  <input data-role="none" type="hidden" name="activetab" value="tab-loxone">
+  <input data-role="none" type="hidden" name="vorlage_vo" value="1">
+  <button data-role="none" class="sm-btn" type="submit" style="background:#546e7a;"><?php echo mo_t('TEXT.K_VORLAGE_VO'); ?></button>
+</form>
 
 <div class="sm-step"><b><?php echo mo_t('TEXT.SCHRITT_4_KOMPLETTE_BAUSTEIN_LISTE'); ?></b><br>
 <b><?php echo mo_t('TEXT.4A_KACHELN'); ?></b>
