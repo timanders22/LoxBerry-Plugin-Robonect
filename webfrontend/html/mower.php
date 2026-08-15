@@ -37,6 +37,32 @@ if (isset($_GET['json'])) {
 
 header('Content-Type: text/plain; charset=utf-8');
 
+/* ---------- Selbsttest: Token pruefen, ohne etwas auszuloesen ----------
+ * Hausregel: jeder Aktionsendpunkt beantwortet ?selftest=1&token=... , ohne
+ * dass etwas passiert. Sonst laesst sich nicht feststellen, ob die Adresse im
+ * Miniserver noch stimmt, ohne wirklich zu schalten.
+ */
+if (isset($_GET['selftest'])) {
+    $mo_cfg_st = mo_config();
+    $mo_soll_st = isset($mo_cfg_st['aktionstoken']) ? (string) $mo_cfg_st['aktionstoken'] : '';
+    $mo_ist_st = isset($_GET['token']) ? (string) $_GET['token'] : '';
+    if ($mo_soll_st === '') {
+        http_response_code(403);
+        echo "SELFTEST;OK=0;ERR=KEIN_TOKEN_EINGERICHTET
+";
+        exit;
+    }
+    if (!hash_equals($mo_soll_st, $mo_ist_st)) {
+        http_response_code(403);
+        echo "SELFTEST;OK=0;ERR=TOKEN
+";
+        exit;
+    }
+    echo "SELFTEST;OK=1;TOKEN=OK;DEV=" . $dev . "
+";
+    exit;
+}
+
 if (isset($_GET['cmd'])) {
     $mo_cfg_tok = mo_config();
     $mo_soll = isset($mo_cfg_tok['aktionstoken']) ? (string) $mo_cfg_tok['aktionstoken'] : '';
