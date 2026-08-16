@@ -447,7 +447,13 @@ function mo_mqtt_publish($st = null, $dev = 1) {
                'batterie' => $st['batterie'], 'maeht' => $st['maeht'], 'laedt' => $st['laedt'],
                'fehler' => $st['fehler'], 'stunden' => $st['stunden'], 'dauer' => $st['dauer'],
                'messer_rest' => $st['messer_rest'], 'messer_warn' => $st['messer_warn'],
-               'temperatur' => $st['temperatur'], 'feuchte' => $st['feuchte'], 'wlan' => $st['wlan']);
+               'temperatur' => $st['temperatur'], 'feuchte' => $st['feuchte'], 'wlan' => $st['wlan'],
+               'timer' => $st['timer']);
+    /* timer, ann, audio, push und ptest fehlten hier. In der Vorlage fuer
+     * Loxone (mo_felder) stehen sie seit jeher, ueber HTTP kamen sie auch -
+     * nur der MQTT-Weg lieferte sie nicht. Wer umstellte, bekam 15 statt 20
+     * Werte und merkte es erst, wenn der Test-Push nicht mehr ausloeste. */
+    $m = array_merge($m, mo_meldeflags($dev));
     $s = @socket_create(AF_INET, SOCK_DGRAM, SOL_UDP);
     if (!$s) { return; }
     foreach ($m as $k => $v) {
@@ -516,6 +522,30 @@ function mo_ann_active($dev = 1) {
 function mo_ptest_active() {
     $f = mo_tmpdir() . '/ptest';
     return (is_file($f) && time() - filemtime($f) < 300) ? 1 : 0;
+}
+
+/**
+ * Die vier Meldeflags an EINER Stelle: ann, audio, push, ptest.
+ *
+ * Sie standen bisher nur in der HTTP-Antwort - ausgerechnet dort, wo sie
+ * das Programm im Miniserver auch ohne MQTT abholen konnte. Wer auf MQTT
+ * umstellte, verlor sie ersatzlos: kein Meldefenster, keine Freigaben und
+ * vor allem kein PTEST, also keine Moeglichkeit mehr, den Push-Weg zu
+ * pruefen, ohne auf ein echtes Ereignis zu warten.
+ *
+ * Seit 1.0.12 liefert diese Funktion die Werte fuer beide Wege. Sie koennen
+ * damit nicht mehr auseinanderlaufen - genau das war der Grund, sie
+ * herauszuziehen statt die Rechnung ein zweites Mal hinzuschreiben.
+ */
+function mo_meldeflags($dev = 1)
+{
+    $cfg = mo_config();
+    return array(
+        'ann'   => mo_ann_active($dev),
+        'audio' => empty($cfg['notify']['audio']) ? 0 : 1,
+        'push'  => empty($cfg['notify']['push']) ? 0 : 1,
+        'ptest' => mo_ptest_active(),
+    );
 }
 
 /** Cron: Ereignisse erkennen und melden. */

@@ -622,7 +622,7 @@ $mw_reiter = array(
 
 <h3 class="sm-h3"><?php echo mo_t('TEXT.LST_ETWAS_AUS'); ?></h3>
 <div class="sm-knopfreihe">
-<a class="sm-btn sm-b-aktion"  href="/plugins/<?= mw_e($mw_plugin) ?>/mower.php?ptest=1" target="_blank"><?php echo mo_t('TEXT.TEST_PUSHNACHRICHT'); ?></a>
+<a class="sm-btn sm-b-aktion"  href="/plugins/<?= mw_e($mw_plugin) ?>/mower.php?ptest=1&amp;token=<?= mw_e($mw_cfg['aktionstoken']) ?>" target="_blank"><?php echo mo_t('TEXT.TEST_PUSHNACHRICHT'); ?></a>
 <a class="sm-btn sm-b-aktion"  href="/plugins/<?= mw_e($mw_plugin) ?>/mower.php?cmd=auto&amp;token=<?= mw_e($mw_cfg['aktionstoken']) ?>" target="_blank"><?php echo mo_t('TEXT.AUTOMATIK'); ?></a>
 <a class="sm-btn sm-b-aktion"  href="/plugins/<?= mw_e($mw_plugin) ?>/mower.php?cmd=home&amp;token=<?= mw_e($mw_cfg['aktionstoken']) ?>" target="_blank"><?php echo mo_t('TEXT.NACH_HAUSE'); ?></a>
 <a class="sm-btn sm-b-aktion"  href="/plugins/<?= mw_e($mw_plugin) ?>/mower.php?cmd=stop&amp;token=<?= mw_e($mw_cfg['aktionstoken']) ?>" target="_blank"><?php echo mo_t('TEXT.STOPP'); ?></a>

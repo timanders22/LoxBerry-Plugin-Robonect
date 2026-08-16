@@ -12,6 +12,35 @@ Zugangsdaten lokal (Dateirechte 0600, HTTP-Basic-Auth) — Loxone ruft nur noch
 
 Kompatibel mit LoxBerry 3.x und **LoxBerry 4** (reines PHP, PHP 7.4 und 8.x).
 
+## Neu in 1.0.12
+
+**Der MQTT-Weg liefert jetzt alles, was der HTTP-Weg liefert.** Bisher
+veröffentlichte das Plugin über MQTT 15 Werte, über HTTP aber 20: es fehlten
+`timer` und die vier Melde-Merker `ann` (Meldefenster), `audio` und `push`
+(Freigaben aus der Konfiguration) sowie `ptest` (Test-Push). Wer auf MQTT
+umstellte, verlor damit genau die Werte, mit denen sich Ansage und
+Pushnachricht im Miniserver steuern und **prüfen** lassen — der Test-Push
+löste über MQTT schlicht nicht mehr aus.
+
+Drei Änderungen, damit das wirklich wirkt:
+
+- Die vier Merker kommen aus **einer** Funktion (`mo_meldeflags()`), die
+  beide Wege benutzen. HTTP und MQTT können nicht mehr auseinanderlaufen.
+- Sie stehen jetzt auch in der **Signatur** des Cron-Laufs. Ohne das wären
+  sie zwar in der Nachricht gewesen, die Nachricht aber nicht verschickt
+  worden: `ann` und `ptest` ändern sich allein durch Zeitablauf, nicht durch
+  einen Zustandswechsel — ein gesetzter `ptest` wäre bis zum halbstündlichen
+  Lebenszeichen liegengeblieben, sein Fenster ist aber nur fünf Minuten breit.
+- `?ptest=1` veröffentlicht **sofort**, statt bis zu eine Minute auf den
+  nächsten Cron-Lauf zu warten. Ein Test, der erst eine Minute später wirkt,
+  sieht aus wie ein Test, der nicht wirkt.
+
+**`?ptest=1` verlangt jetzt ein Token.** Bisher konnte jedes Gerät im Heimnetz
+dem Anwender eine Pushnachricht aufs Telefon schicken — und seit dieser Fassung
+hätte es zusätzlich eine MQTT-Meldung ausgelöst. Der Saugroboter verlangt seit
+1.0.4 ein Token, hier fehlte es. Die Adresse steht in der Oberfläche mit Token
+dabei; wer sie nirgends verdrahtet hatte, merkt nichts.
+
 ## Neu in 1.0.11
 
 **Token pruefbar, ohne etwas auszuloesen.** Neuer Aufruf
@@ -136,6 +165,7 @@ liefern in beiden Sprachen zeichengleiche Ausgabe ohne eine Meldung.
 | `/plugins/robonect/mower.php?json=1` | kompletter Zustand als JSON |
 | `/plugins/robonect/mower.php?cmd=auto` | Automatik (auch `man`, `home`, `eod`, `start`, `stop`) |
 | `/plugins/robonect/mower.php?cmd=blade_reset` | Messerwechsel quittieren |
+| `/plugins/robonect/mower.php?ptest=1&token=…` | Test-Pushnachricht auslösen **(Token nötig ab 1.0.12)** |
 
 ## Sicherheit
 

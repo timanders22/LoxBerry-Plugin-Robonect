@@ -17,7 +17,8 @@
  *   Ohne passendes Token aus dem Reiter "Einbindung in Loxone" antwortet
  *   ?cmd= mit HTTP 403.
  *
- * Weitere Aufrufe: ?debug=1  ?json=1  ?refresh=1  ?ptest=1
+ * Weitere Aufrufe: ?debug=1  ?json=1  ?refresh=1
+ *   ?ptest=1&token=T   Test-Pushnachricht anstossen (seit 1.0.12 tokenpflichtig)
  *
  * Zugangsdaten stehen ausschliesslich in der Plugin-Konfiguration - diese URL
  * enthaelt KEIN Passwort und darf daher bedenkenlos in der Loxone-Projektdatei stehen.
@@ -36,6 +37,19 @@ if (isset($_GET['json'])) {
 }
 
 header('Content-Type: text/plain; charset=utf-8');
+
+/** Ist ein gueltiges Aktionstoken mitgeschickt worden?
+ *
+ * Ohne eingerichtetes Token ist die Antwort NEIN - ein leeres Soll darf
+ * nicht auf ein leeres Ist passen, sonst schuetzt die Pruefung genau die
+ * Anlage nicht, bei der noch nie jemand ein Token gesetzt hat.
+ */
+function mo_token_ok() {
+    $cfg = mo_config();
+    $soll = isset($cfg['aktionstoken']) ? (string) $cfg['aktionstoken'] : '';
+    if ($soll === '') { return false; }
+    return hash_equals($soll, isset($_GET['token']) ? (string) $_GET['token'] : '');
+}
 
 /* ---------- Selbsttest: Token pruefen, ohne etwas auszuloesen ----------
  * Hausregel: jeder Aktionsendpunkt beantwortet ?selftest=1&token=... , ohne
@@ -83,14 +97,35 @@ if (isset($_GET['cmd'])) {
 }
 
 if (isset($_GET['ptest'])) {
+    /* Seit 1.0.12 tokenpflichtig wie ?cmd= - Hausstandard fuer alle
+     * Aktionsendpunkte. Der Aufruf setzt PTEST=1 fuer fuenf Minuten; das
+     * Loxone-Programm schickt daraufhin eine echte Pushnachricht, und seit
+     * dieser Fassung geht zusaetzlich sofort eine MQTT-Meldung heraus. Ohne
+     * Token konnte jedes Geraet im Netz dem Anwender Meldungen aufs Telefon
+     * schicken. Die Adresse steht in der Oberflaeche mit Token dabei. */
+    if (!mo_token_ok()) {
+        http_response_code(403);
+        echo "PTEST;OK=0;ERR=TOKEN\n";
+        exit;
+    }
     @file_put_contents(mo_tmpdir() . '/ptest', '1');
     mo_log('Test-Pushnachricht angefordert (PTEST=1 fuer 5 Minuten)');
+    /* Sofort melden, statt bis zu einer Minute auf den Cron zu warten.
+     * Ueber HTTP holt sich der Miniserver den Merker beim naechsten Abruf;
+     * ueber MQTT muss ihn das Plugin schicken - und ein Test, der erst eine
+     * Minute spaeter wirkt, sieht aus wie ein Test, der nicht wirkt.
+     * Ueber alle Maeher, weil der Merker fuer alle gilt. */
+    foreach (array_keys(mo_mowers()) as $mo_n) {
+        mo_mqtt_publish(null, $mo_n);
+    }
     echo "PTEST;OK=1;DAUER=300\n";
     exit;
 }
 
 $st = mo_state($dev, isset($_GET['refresh']));
 $cfg = mo_config();
+/* Dieselbe Quelle wie die MQTT-Meldung - siehe mo_meldeflags(). */
+$flags = mo_meldeflags($dev);
 
 if (isset($_GET['debug'])) {
     $m = mo_mower($dev);
@@ -108,7 +143,4 @@ printf("MOWER;OK=%d;CODE=%d;MODUS=%d;BATT=%d;MAEHT=%d;LAEDT=%d;FEHLER=%d;STUNDEN
     $st['ok'], $st['code'], $st['modus'], $st['batterie'], $st['maeht'], $st['laedt'], $st['fehler'],
     $st['stunden'], $st['dauer'], $st['messer_rest'], $st['messer_warn'],
     $st['temperatur'], $st['feuchte'], $st['wlan'], $st['timer'],
-    mo_ann_active($dev),
-    empty($cfg['notify']['audio']) ? 0 : 1,
-    empty($cfg['notify']['push']) ? 0 : 1,
-    mo_ptest_active());
+    $flags['ann'], $flags['audio'], $flags['push'], $flags['ptest']);
