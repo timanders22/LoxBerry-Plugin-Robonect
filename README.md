@@ -12,6 +12,66 @@ Zugangsdaten lokal (Dateirechte 0600, HTTP-Basic-Auth) — Loxone ruft nur noch
 
 Kompatibel mit LoxBerry 3.x und **LoxBerry 4** (reines PHP, PHP 7.4 und 8.x).
 
+## Neu in 1.1.0
+
+Diese Fassung behebt drei Dinge, die **gemessen** wurden, und ergänzt vier
+Funktionen. Die vollständige Liste mit den Messwerten steht in der
+Vorschlagsdatei zu 1.0.13.
+
+**Der Knopf „Einstellungen sichern" lieferte keine Datei.** Sein Zweig stand
+hinter `LBWeb::lbheader()`; der Seitenkopf war damit schon geschrieben, und
+`header()` kam zu spät. Statt eines Downloads bekam der Anwender zwei Warnungen
+und die vollständige Konfiguration **samt Aktionstoken als sichtbaren Text** in
+einer HTML-Seite. Die Reihenfolge in `index.php` ist jetzt Bauvorschrift, und
+eine Zeile im Reiter Test prüft sie nach.
+
+**Eine beschädigte Konfigurationsdatei riss die Zweitschrift mit.** Ungültiges
+JSON galt stillschweigend als leer; ein einziger Aufruf der Oberfläche genügte,
+um Mäher, Passwort, Nullpunkt und MQTT-Einstellung zu verlieren, ein neues
+Aktionstoken zu würfeln — womit jede Loxone-Adresse auf 403 lief — und die
+Zweitschrift mit der Werkseinstellung zu überschreiben. Ohne eine einzige
+Meldung. Jetzt bleibt die beschädigte Datei als `mower.json.kaputt` liegen, es
+gibt genau eine Protokollzeile, die Konfiguration wird aus der Zweitschrift
+wiederhergestellt, und die Zweitschrift wird nur noch überschrieben, wenn
+wirklich eine Konfiguration **mit** Token gespeichert wird.
+
+**Ein Formular von einer fremden Seite konnte das Aktionstoken neu würfeln.**
+`htmlauth/` schützt gegen den unangemeldeten Aufruf, nicht dagegen, dass der
+Browser eines angemeldeten Bedieners ein untergeschobenes Formular abschickt.
+Danach hätten sämtliche Virtuellen Ausgänge HTTP 403 bekommen — still, denn ein
+Virtueller Ausgang wertet die Antwort nicht aus. Jedes der Formulare trägt
+jetzt ein aus dem Aktionstoken abgeleitetes Merkmal, geprüft von **einem**
+Wachposten vor allen Handlern.
+
+Dazu:
+
+- **Ein Lebenszeichen.** Ein virtueller Eingang behält seinen letzten Wert;
+  fällt der Cron-Lauf aus, steht in Loxone weiter „parkt, Akku 80 %". Neu sind
+  `TS` (Zeitstempel), `ZAEHLER` (läuft 0…999 um) und `FEHLERALTER`, über MQTT
+  zusätzlich `<präfix>/status/ts`, `/status/zaehler` und `/status/ok`.
+  Baustein 8 der Liste im Reiter „Einbindung in Loxone" wertet das aus.
+- **Der MQTT-Gateway wird nach seiner Fassung gefragt.** `Gatewayversion` aus
+  `general.json` entscheidet, ob das Abo von Hand einzutragen ist (V1) oder
+  nicht (V2). Ist die Fassung nicht lesbar, stehen beide Sätze da. Der Schritt
+  „Abo eintragen" fehlte bisher ganz.
+- **Bis zu neun Mäher** statt zwei, mit ausgeschriebenem Index und Löschhaken.
+- **Einsatzstatistik** (ab Werk aus), **Fehlerhistorie**, **Trockenlauf** für
+  die Steuerbefehle und ein Knopf für die **rohe Antwort** des Moduls.
+- Der Reiter Test hat eine **Selbstprüfung** mit zwölf Zeilen; bisher standen
+  dort nur Knöpfe.
+- Der Netzabruf läuft über `curl` mit eigener Verbindungs-Zeitgrenze —
+  `file_get_contents` deckt mit `timeout` nur das Lesen ab, für den
+  Verbindungsaufbau galt `default_socket_timeout` mit 60 Sekunden. Ein falsches
+  Passwort wird jetzt als solches gemeldet und nicht mehr als „keine
+  Verbindung".
+- Der MQTT-Versand kommt ohne `php-sockets` aus. `@socket_create()` fängt einen
+  fehlenden Funktionsnamen nicht ab — der Cron-Lauf starb dann mitten in der
+  Schleife, und `?ptest=1` antwortete dem Miniserver mit HTTP 500.
+
+**Nicht am Gerät geprüft:** Diese Fassung ist gegen einen Prüfstand gemessen,
+nicht gegen ein Robonect-Modul. Die Knöpfe „Rohe Antwort" im Reiter Test sind
+genau dafür da, die offenen Fragen an der eigenen Anlage zu beantworten.
+
 ## Neu in 1.0.12
 
 **Der MQTT-Weg liefert jetzt alles, was der HTTP-Weg liefert.** Bisher
