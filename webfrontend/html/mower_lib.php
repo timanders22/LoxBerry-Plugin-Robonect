@@ -65,6 +65,25 @@ function mo_paths() {
                  'tmp' => sys_get_temp_dir() . '/robonect', 'lbhome' => '');
 }
 
+function mo_vorgaben()
+{
+    /* Herausgezogen aus mo_config(): die Vorgaben stehen weiterhin an
+     * EINER Stelle, jetzt aber an einer abrufbaren. Die Sicherung
+     * braucht die Schluesselliste, um Fremdes zu erkennen - ohne sie
+     * koennte sie nur alles durchwinken. */
+    return array(
+    'mowers' => array(),          // [{name, ip, user, pass}]
+    'cache_sec' => 20,
+    'blade_hours' => 200,         // Messerwechsel-Intervall in Betriebsstunden
+    'blade_base' => 0,            // Betriebsstunden beim letzten Messerwechsel
+    'mqtt_enabled' => 0,
+    'mqtt_topic' => 'maeher',
+    'notify' => array(),
+    'tts' => array(),
+    'aktionstoken' => '',          // schuetzt ?cmd= (unangemeldeter Endpunkt)
+);
+}
+
 function mo_config() {
     $p = mo_paths();
     if ((!is_file($p['config']) || trim((string) @file_get_contents($p['config'])) === '' || trim((string) @file_get_contents($p['config'])) === '{}') && is_file($p['backup'])) {
@@ -74,17 +93,7 @@ function mo_config() {
     }
     $cfg = is_file($p['config']) ? (json_decode((string) file_get_contents($p['config']), true) ?: array()) : array();
     if (!is_array($cfg)) { $cfg = array(); }
-    $cfg += array(
-        'mowers' => array(),          // [{name, ip, user, pass}]
-        'cache_sec' => 20,
-        'blade_hours' => 200,         // Messerwechsel-Intervall in Betriebsstunden
-        'blade_base' => 0,            // Betriebsstunden beim letzten Messerwechsel
-        'mqtt_enabled' => 0,
-        'mqtt_topic' => 'maeher',
-        'notify' => array(),
-        'tts' => array(),
-        'aktionstoken' => '',          // schuetzt ?cmd= (unangemeldeter Endpunkt)
-    );
+    $cfg += mo_vorgaben();
     if (!is_array($cfg['mowers'])) { $cfg['mowers'] = array(); }
     if (empty($cfg['mowers']) && !empty($cfg['ip'])) { // Migration Einzelgeraet
         $cfg['mowers'] = array(array('name' => 'Rasenmaeher', 'ip' => (string) $cfg['ip'],
@@ -130,8 +139,6 @@ function mo_token_erzeugen($laenge = 24) {
     return $t;
 }
 function mo_tmpdir() { $p = mo_paths(); if (!is_dir($p['tmp'])) { @mkdir($p['tmp'], 0775, true); } return $p['tmp']; }
-function mo_datadir() { $p = mo_paths(); if (!is_dir($p['data'])) { @mkdir($p['data'], 0775, true); } return $p['data']; }
-
 /**
  * Die letzten $max Zeilen einer Datei - ohne sie ganz einzulesen.
  *
@@ -792,4 +799,67 @@ function mo_vo_vorlage() {
     }
     $o .= '</VirtualOut>' . $crlf;
     return array('VQ_robonect_steuern.xml', $o);
+}
+
+
+/**
+ * Den ganzen Konfigurationsstand ablegen - und sagen, ob es geklappt hat.
+ *
+ * Bisher schrieb diese Linie mitten in index.php. Das Zurueckspielen einer
+ * Sicherung braucht aber EINE Stelle, sonst steht die Pruefung "hat es
+ * geklappt?" an vier Orten verschieden da.
+ *
+ * Der Schreibweg ist der, den die Linie ohnehin benutzt - hier wird kein
+ * Verhalten geaendert, nur ein vorhandenes zusammengefasst.
+ */
+function mo_config_speichern($cfg)
+{
+    $p = mo_paths();
+    $js = json_encode($cfg, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE
+                            | JSON_UNESCAPED_SLASHES);
+    if ($js === false) {
+        return false;   /* ungueltiges UTF-8 - lieber gar nicht schreiben
+                           als eine halbe Datei hinterlassen */
+    }
+    @mkdir(dirname($p['config']), 0775, true);
+    return (bool) (mo_write_atomic($p['config'], $js));
+}
+
+
+/**
+ * Eine Sicherungsdatei einlesen - und dabei NICHTS durchgehen lassen.
+ *
+ * Der wichtigste Punkt: eine halb gueltige Datei ueberschreibt GAR NICHTS.
+ * Wer eine Sicherung zurueckspielt, will entweder den ganzen Stand oder
+ * gar keinen - eine zur Haelfte uebernommene Konfiguration ist schlimmer
+ * als die alte, und man sieht es ihr nicht an.
+ *
+ * Unbekannte Schluessel sind eine Beanstandung, kein stiller Verlust: sie
+ * stammen aus einer anderen Fassung oder einem anderen Plugin.
+ *
+ * Rueckgabe: array(Konfiguration|null, Beanstandungen[], uebernommene Werte).
+ */
+function mo_sicherung_lesen($roh)
+{
+    $mangel = array();
+    $daten = json_decode((string) $roh, true);
+    if (!is_array($daten)) {
+        return array(null, array(mo_t('TEXT.SICH_KEIN_JSON')), 0);
+    }
+    $neu = mo_vorgaben();
+    $bekannt = array_keys($neu);
+    $anzahl = 0;
+    foreach ($daten as $k => $w) {
+        if (!in_array($k, $bekannt, true)) {
+            $mangel[] = sprintf(mo_t('TEXT.SICH_FREMD'),
+                                 htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'));
+            continue;
+        }
+        $neu[$k] = $w;
+        $anzahl++;
+    }
+    if ($anzahl === 0) {
+        $mangel[] = mo_t('TEXT.SICH_LEER');
+    }
+    return array($mangel ? null : $neu, $mangel, $anzahl);
 }

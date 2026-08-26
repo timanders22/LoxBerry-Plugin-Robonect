@@ -246,6 +246,54 @@ function mw_e($s) { return htmlspecialchars((string) $s, ENT_QUOTES, 'UTF-8'); }
 $mw_frame = class_exists('LBWeb', false);
 if ($mw_frame) { LBWeb::lbheader('Rasenm&auml;her (Robonect)', 'https://wiki.loxberry.de/', 'help.html'); }
 $mw_host = mw_e(isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : '<loxberry-ip>');
+
+/* ---------------- Einstellungen sichern ----------------
+ *
+ * Ausgegeben wird die VOLLE Konfiguration - samt Aktionstoken. Ohne ihn
+ * stuenden nach dem Zurueckspielen alle Felder richtig, und das Plugin
+ * kaeme trotzdem nicht an die Anlage; die Datei waere wertlos. Damit
+ * traegt sie ein Geheimnis, und der Hinweis am Knopf sagt das. */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['mo_sichern'])) {
+    $mo_js = json_encode(mo_config(),
+        JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    if ($mo_js !== false) {
+        header('Content-Type: application/json; charset=utf-8');
+        header('Content-Disposition: attachment; filename="robonect_einstellungen_'
+               . date('Ymd_His') . '.json"');
+        echo $mo_js;
+        exit;
+    }
+    $mw_note = mo_t('TEXT.SICH_SCHREIBFEHLER');
+}
+
+/* ---------------- Einstellungen zurueckspielen ----------------
+ *
+ * is_uploaded_file() ZUERST: ohne diese Pruefung liesse sich jede Datei
+ * des Servers unterschieben. Dann die Groessengrenze - eine Sicherung
+ * dieses Plugins ist wenige Kilobyte gross; alles darueber wird gar
+ * nicht erst gelesen. */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['mo_zurueck'])) {
+    if (!isset($_FILES['mo_sicherung']) || !is_array($_FILES['mo_sicherung'])
+        || !isset($_FILES['mo_sicherung']['tmp_name'])
+        || !@is_uploaded_file($_FILES['mo_sicherung']['tmp_name'])) {
+        $mw_note = mo_t('TEXT.SICH_KEINE_DATEI');
+    } elseif ((int) $_FILES['mo_sicherung']['size'] > 262144) {
+        $mw_note = mo_t('TEXT.SICH_ZU_GROSS');
+    } else {
+        list($mo_neu, $mo_mangel, $mo_n) = mo_sicherung_lesen(
+            (string) @file_get_contents($_FILES['mo_sicherung']['tmp_name']));
+        if ($mo_neu === null) {
+            /* ALLE Beanstandungen, nicht nur die erste - und geaendert
+             * wird nichts. */
+            $mw_note = mo_t('TEXT.SICH_ABGELEHNT') . ' ' . implode(' ', $mo_mangel);
+        } elseif (mo_config_speichern($mo_neu)) {
+            $mw_note = sprintf(mo_t('TEXT.SICH_UEBERNOMMEN'), $mo_n);
+        } else {
+            $mw_note = mo_t('TEXT.SICH_SCHREIBFEHLER');
+        }
+    }
+}
+
 ?>
 <style>
 .sm-wrap { max-width: 940px; margin: 0 auto; font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; color: #333; }
@@ -657,6 +705,25 @@ $mw_reiter = array(
 </form>
 </div>
 
+
+<h2><?= mo_t('TEXT.H_SICHERUNG') ?></h2>
+<div class="sm-hinweis"><?= mo_t('TEXT.SICH_ERKLAERUNG') ?></div>
+<div class="sm-warnung"><?= mo_t('TEXT.SICH_WARNUNG') ?></div>
+<div class="sm-knopfreihe">
+  <!-- ZWEI GETRENNTE Formulare. Das Sichern schickt einen Download und ruft
+       exit auf; das Zurueckspielen braucht enctype="multipart/form-data".
+       Wer beides in ein Formular legt, bekommt entweder keinen Upload oder
+       einen Download, der das Speichern verschluckt. -->
+  <form action="index.php" method="post">
+    <input data-role="none" type="hidden" name="activetab" value="tab-settings">
+    <button data-role="none" class="sm-btn sm-b-lesen" type="submit" name="mo_sichern" value="1"><?= mo_t('TEXT.K_SICHERN') ?></button>
+  </form>
+  <form action="index.php" method="post" enctype="multipart/form-data">
+    <input data-role="none" type="hidden" name="activetab" value="tab-settings">
+    <input data-role="none" type="file" name="mo_sicherung" accept=".json">
+    <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="mo_zurueck" value="1"><?= mo_t('TEXT.K_ZURUECK') ?></button>
+  </form>
+</div>
 </div>
 <script>
 function mwTtsMode() {
