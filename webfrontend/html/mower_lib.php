@@ -64,7 +64,7 @@ function mo_paths() {
         return array('config' => $lb . '/config/plugins/' . $pd . '/mower.json',
                      'backup' => $lb . '/config/plugins/' . $pd . '.backup.json',
                      'log' => $lb . '/log/plugins/' . $pd . '/mower.log',
-                     'data' => $lb . '/data/plugins/' . $pd,
+                     'datadir' => $lb . '/data/plugins/' . $pd,
                      'tmp' => '/tmp/robonect', 'lbhome' => $lb,
                      // Der Ordnername wird gebraucht, wo eine Adresse auf das
                      // eigene Plugin zeigt - Endpunkt, Vorlage, Selbstpruefung.
@@ -73,7 +73,7 @@ function mo_paths() {
     return array('config' => dirname(dirname(__DIR__)) . '/config/mower.json',
                  'backup' => dirname(dirname(__DIR__)) . '/config/mower.backup.json',
                  'log' => sys_get_temp_dir() . '/robonect/mower.log',
-                 'data' => sys_get_temp_dir() . '/robonect/data',
+                 'datadir' => sys_get_temp_dir() . '/robonect/data',
                  'tmp' => sys_get_temp_dir() . '/robonect', 'lbhome' => '',
                  'plugin' => $pd);
 }
@@ -905,7 +905,7 @@ function mo_json_lesen($pfad)
     return is_array($d) ? $d : array();
 }
 
-function mo_lauf_datei() { return mo_paths()['data'] . '/lauf.json'; }
+function mo_lauf_datei() { return mo_paths()['datadir'] . '/lauf.json'; }
 
 function mo_lauf_lesen()
 {
@@ -944,7 +944,7 @@ function mo_lauf_alter()
  * der nachts auftritt und sich von selbst loest, ist am Morgen unsichtbar -
  * es sei denn, jemand liest das Protokoll.
  * ================================================================== */
-function mo_fehler_datei() { return mo_paths()['data'] . '/fehler.json'; }
+function mo_fehler_datei() { return mo_paths()['datadir'] . '/fehler.json'; }
 
 function mo_fehler_liste()
 {
@@ -984,7 +984,7 @@ function mo_fehler_alter_h()
  * Wochenwechsel stehen hier ausgeschrieben. Die Woche ist die ISO-Woche
  * ('oW') - 'YW' laege in der Neujahrswoche daneben.
  * ================================================================== */
-function mo_stat_datei() { return mo_paths()['data'] . '/statistik.json'; }
+function mo_stat_datei() { return mo_paths()['datadir'] . '/statistik.json'; }
 
 function mo_stat_lesen()
 {
@@ -1853,7 +1853,7 @@ function mo_sicherung_lesen($roh)
  */
 function mo_endpunkt_probe($frisch = false)
 {
-    $cache = mo_paths()['data'] . '/endpunkt.json';
+    $cache = mo_paths()['datadir'] . '/endpunkt.json';
     if (!$frisch && is_file($cache) && time() - filemtime($cache) < 300) {
         $c = mo_json_lesen($cache);
         if (isset($c['ok'])) { return $c; }
