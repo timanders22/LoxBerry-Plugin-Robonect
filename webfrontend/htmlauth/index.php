@@ -87,7 +87,6 @@ $mw_cfgdir  = dirname($mw_cfgfile);
 $mw_bkfile  = $mw_p['backup'];
 $mw_logfile = $mw_p['log'];
 
-function mw_e($s) { return htmlspecialchars((string) $s, ENT_QUOTES, 'UTF-8'); }
 
 /* ================= 2. Konfiguration, Vorgaben, Token ================= */
 
