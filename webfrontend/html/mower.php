@@ -51,7 +51,35 @@
  */
 
 require_once __DIR__ . '/mower_lib.php';
-$dev = isset($_GET['dev']) ? max(1, min(mo_max_maeher(), (int) $_GET['dev'])) : 1;
+
+/** A6: der unangemeldete Endpunkt LIEST nur - er legt nichts an.
+ *
+ * Gemessen am 04.09.2026: eine tokenlose, korrekt mit HTTP 403 abgewiesene
+ * Anfrage legte config/plugins/<ordner>/mower.json an, 262 Byte, mit
+ * Kennwort und Aktionstoken - aus der Zweitschrift geheilt. Das ist der
+ * Zustand nach jedem Upgrade, nicht ein Sonderfall.
+ */
+function mo_cfg_ro() { $mo_z = null; return mo_config($mo_z, false); }
+
+/* A15: eine unzulaessige Geraetenummer wird abgewiesen, nicht zurechtgebogen.
+ *
+ * Bis 1.1.3 stand hier max(1, min(...)). Gemessen: ?dev=99999, ?dev=-5 und
+ * ?dev=../../etc/passwd lieferten allesamt unauffaellig die Statuszeile von
+ * Maeher 1, mit HTTP 200 und ohne Meldung. Ein Tippfehler in der
+ * Loxone-Adresse holte damit stillschweigend die Werte eines ANDEREN
+ * Geraets - eine Falschaussage, die richtig aussieht. */
+$dev = 1;
+if (isset($_GET['dev'])) {
+    $mo_dev_roh = is_string($_GET['dev']) ? $_GET['dev'] : '';
+    if (preg_match('/^[0-9]{1,2}$/', $mo_dev_roh) !== 1
+        || (int) $mo_dev_roh < 1 || (int) $mo_dev_roh > mo_max_maeher()) {
+        http_response_code(400);
+        header('Content-Type: text/plain; charset=utf-8');
+        echo 'MOWER;OK=0;ERR=DEV;ERLAUBT=1-' . mo_max_maeher() . "\n";
+        exit;
+    }
+    $dev = (int) $mo_dev_roh;
+}
 
 /** Ist ein gueltiges Aktionstoken mitgeschickt worden?
  *
@@ -64,7 +92,7 @@ $dev = isset($_GET['dev']) ? max(1, min(mo_max_maeher(), (int) $_GET['dev'])) : 
  * http_response_code() hinausgeht - der Statuscode fehlte dann.
  */
 function mo_token_ok() {
-    $cfg = mo_config();
+    $cfg = mo_cfg_ro();
     $soll = isset($cfg['aktionstoken']) ? (string) $cfg['aktionstoken'] : '';
     if ($soll === '') { return false; }
     $ist = (isset($_GET['token']) && is_string($_GET['token'])) ? $_GET['token'] : '';
@@ -73,8 +101,27 @@ function mo_token_ok() {
 
 /** Kein Token eingerichtet? Dann sagt die Antwort das - und nicht "falsch". */
 function mo_token_eingerichtet() {
-    $cfg = mo_config();
+    $cfg = mo_cfg_ro();
     return trim((string) (isset($cfg['aktionstoken']) ? $cfg['aktionstoken'] : '')) !== '';
+}
+
+/* A7 (04.09.2026, gemessen): der json-Zweig stand VOR allen Aktionszweigen
+ * und beendete die Anfrage mit exit. "?cmd=stop&json=1" lieferte deshalb
+ * HTTP 200 und den Zustand als JSON - der Befehl wurde nie ausgefuehrt.
+ * Dasselbe fuer selftest, ptest und roh. Ein Virtueller Ausgang liest die
+ * Antwort nicht: der Befehl sah erfolgreich aus und geschah nie.
+ *
+ * Abgewiesen statt still entschieden - welche der beiden Absichten gemeint
+ * war, weiss nur der Aufrufer. */
+$mo_mehrdeutig = array();
+foreach (array('cmd', 'ptest', 'roh', 'selftest') as $mo_p) {
+    if (isset($_GET['json']) && isset($_GET[$mo_p])) { $mo_mehrdeutig[] = $mo_p; }
+}
+if ($mo_mehrdeutig) {
+    http_response_code(400);
+    header('Content-Type: text/plain; charset=utf-8');
+    echo 'MOWER;OK=0;ERR=MEHRDEUTIG;MIT=json,' . implode(',', $mo_mehrdeutig) . "\n";
+    exit;
 }
 
 if (isset($_GET['json'])) {
@@ -105,7 +152,13 @@ if (isset($_GET['selftest'])) {
         echo "SELFTEST;OK=0;ERR=TOKEN\n";
         exit;
     }
-    echo 'SELFTEST;OK=1;TOKEN=OK;DEV=' . $dev . ';FASSUNG=1.1.0' . "\n";
+    /* A8: die Fassung stand hier fest im Quelltext und meldete in 1.1.1 bis
+     * 1.1.3 unveraendert "1.1.0". Jetzt aus der Quelle, die auch LoxBerry
+     * benutzt; ist sie nicht feststellbar, bleibt das Feld leer statt zu
+     * raten. */
+    $mo_fv = mo_fassung();
+    echo 'SELFTEST;OK=1;TOKEN=OK;DEV=' . $dev
+       . ';FASSUNG=' . ($mo_fv !== '' ? $mo_fv : 'unbekannt') . "\n";
     exit;
 }
 
@@ -121,6 +174,15 @@ if (isset($_GET['selftest'])) {
  * Bereich. Tokenpflichtig ist er trotzdem: er gibt Geraeteinnenwerte preis.
  */
 if (isset($_GET['roh'])) {
+    /* B10: dieselbe Unterscheidung wie bei selftest und cmd. Abgewiesen
+     * wurde vorher richtig, nur die Begruendung war falsch - auf einer
+     * frisch eingerichteten Anlage suchte der Anwender einen Tippfehler in
+     * einem Token, das es noch gar nicht gab. */
+    if (!mo_token_eingerichtet()) {
+        http_response_code(403);
+        echo "ROH;OK=0;ERR=KEIN_TOKEN_EINGERICHTET\n";
+        exit;
+    }
     if (!mo_token_ok()) {
         http_response_code(403);
         echo "ROH;OK=0;ERR=TOKEN\n";
@@ -135,6 +197,10 @@ if (isset($_GET['roh'])) {
     }
     list($j, $grund, $gtext) = mo_api_roh($befehl, $dev, '', 5);
     if ($j === null) {
+        /* A16: der Statuscode taugt sonst nicht als Ueberwachungsmerkmal -
+         * ein gescheiterter Geraetekontakt sah aus wie ein Erfolg. 502:
+         * die Anfrage war richtig, die Gegenstelle hat nicht geliefert. */
+        http_response_code($grund === 'nicht_konfiguriert' ? 409 : 502);
         echo 'ROH;OK=0;BEFEHL=' . $befehl . ';GRUND=' . $grund . ';INFO=' . $gtext . "\n";
         exit;
     }
@@ -167,10 +233,33 @@ if (isset($_GET['cmd'])) {
             exit;
         }
         $ok = mo_blade_reset($dev);
+        /* A3/A16: schlaegt es fehl, ist der Maeher nicht erreichbar - der
+         * Nullpunkt bleibt dann ausdruecklich stehen. Der Grund gehoert in
+         * die Antwort, sonst sucht der Anwender einen Schreibfehler. */
+        if ($ok === 0) {
+            http_response_code(502);
+            echo "CMD;OK=0;BEFEHL=blade_reset;INFO=Maeher antwortet nicht - Nullpunkt unveraendert\n";
+            exit;
+        }
         echo 'CMD;OK=' . $ok . ";BEFEHL=blade_reset\n";
         exit;
     }
     list($ok, $info) = mo_command($cmd, $dev, isset($_GET['p']) && is_string($_GET['p']) ? $_GET['p'] : '', $probe);
+    /* A16: bis 1.1.3 ging in diesem Zweig alles mit HTTP 200 hinaus - der
+     * unbekannte Befehl, der nicht eingerichtete Maeher und der
+     * fehlgeschlagene Geraetekontakt. Der ?roh=-Zweig nebenan setzte laengst
+     * 400. Jetzt einheitlich: 400 = die Anfrage taugt nicht, 409 = die
+     * Anlage ist nicht eingerichtet, 502 = das Geraet hat nicht geliefert.
+     * OK=2 ist der Trockenlauf und bleibt 200. */
+    if ($ok === 0) {
+        if (strpos($info, 'unbekannt') !== false || strpos($info, 'Unzulaessig') !== false) {
+            http_response_code(400);
+        } elseif (strpos($info, 'nicht konfiguriert') !== false) {
+            http_response_code(409);
+        } else {
+            http_response_code(502);
+        }
+    }
     echo 'CMD;OK=' . $ok . ';BEFEHL=' . preg_replace('/[^A-Za-z0-9_\-]/', '', $cmd)
        . ($probe ? ';PROBE=1' : '') . ';INFO=' . mo_mqtt_wert_saeubern($info) . "\n";
     exit;
@@ -182,6 +271,11 @@ if (isset($_GET['ptest'])) {
      * schickt daraufhin eine echte Pushnachricht, und zusaetzlich geht
      * sofort eine MQTT-Meldung heraus. Ohne Token konnte jedes Geraet im
      * Netz dem Anwender Meldungen aufs Telefon schicken. */
+    if (!mo_token_eingerichtet()) {
+        http_response_code(403);
+        echo "PTEST;OK=0;ERR=KEIN_TOKEN_EINGERICHTET\n";
+        exit;
+    }
     if (!mo_token_ok()) {
         http_response_code(403);
         echo "PTEST;OK=0;ERR=TOKEN\n";
@@ -202,7 +296,19 @@ if (isset($_GET['ptest'])) {
 }
 
 $st = mo_state($dev, isset($_GET['refresh']));
-$cfg = mo_config();
+$cfg = mo_cfg_ro();
+
+/* ?debug=1 nennt Name und ADRESSE des Maehers, WLAN-Pegel, Fehlertext und
+ * den Nullpunkt des Messerwechsels. Das sind Innenwerte des Heimnetzes, und
+ * der Endpunkt liegt im unangemeldeten Bereich - dieselbe Ueberlegung, aus
+ * der ?roh= seit jeher tokenpflichtig ist. Die Statuszeile darunter bleibt
+ * offen: sie ist die Auskunft, die Loxone braucht.
+ * UMSTIEGSFOLGE: wer ?debug=1 von Hand aufruft, haengt jetzt &token=... an. */
+if (isset($_GET['debug']) && !mo_token_ok()) {
+    http_response_code(403);
+    echo "DEBUG;OK=0;ERR=" . (mo_token_eingerichtet() ? 'TOKEN' : 'KEIN_TOKEN_EINGERICHTET') . "\n";
+    exit;
+}
 
 if (isset($_GET['debug'])) {
     $m = mo_mower($dev);
@@ -213,8 +319,13 @@ if (isset($_GET['debug'])) {
     if ($st['grund'] !== '') { echo 'Grund: ' . $st['grund'] . ' - ' . $st['grundtext'] . "\n"; }
     if ($st['fehler']) { echo 'FEHLER ' . $st['fehler'] . ': ' . $st['fehlertext'] . "\n"; }
     echo 'Betriebsstunden: ' . $st['stunden'] . ' h  aktuelle Laufzeit: ' . $st['dauer'] . " min\n";
-    echo 'Messer: noch ' . $st['messer_rest'] . ' h bis zum Wechsel (Intervall ' . (int) $cfg['blade_hours']
-       . ' h, Nullpunkt bei ' . (int) $cfg['blade_base'] . " h)\n";
+    /* Intervall und Nullpunkt gelten seit 1.1.4 je Maeher; hier stand bis
+     * dahin der globale Wert und damit fuer jeden Maeher ausser dem zuletzt
+     * quittierten eine Zahl, die nicht galt. */
+    echo 'Messer: noch ' . $st['messer_rest'] . ' h bis zum Wechsel (Intervall '
+       . ($m ? (int) $m['blade_hours'] : (int) $cfg['blade_hours'])
+       . ' h, Nullpunkt bei ' . ($m ? (int) $m['blade_base'] : (int) $cfg['blade_base'])
+       . ' h' . ($m && empty($m['blade_eigen']) ? ', geerbt aus der Vorgabe' : '') . ")\n";
     echo 'Temperatur: ' . $st['temperatur'] . ' C  Feuchte: ' . $st['feuchte'] . ' %  WLAN: ' . $st['wlan'] . " dBm\n";
     echo 'Letzter Cron-Lauf: ' . ($lauf['ts'] > 0 ? date('d.m.Y H:i:s', (int) $lauf['ts'])
         . ' (vor ' . mo_lauf_alter() . ' s), Zaehler ' . (int) $lauf['zaehler']

@@ -12,6 +12,111 @@ Zugangsdaten lokal (Dateirechte 0600, HTTP-Basic-Auth) — Loxone ruft nur noch
 
 Kompatibel mit LoxBerry 3.x und **LoxBerry 4** (reines PHP, PHP 7.4 und 8.x).
 
+## Neu in 1.1.4
+
+Diese Fassung behebt neunzehn gemessene Befunde aus einer vollständigen
+Durchsicht. Die Messungen stehen in der Befundliste zur Vorfassung.
+
+**Umstiegsfolgen — bitte vor dem Einspielen lesen:**
+
+- **Bei nicht erreichbarem Mäher senden `BATT`, `FEUCHTE` jetzt `-1` und
+  `TEMP`, `WLAN` jetzt `-999`** statt einer 0. Eine 0 ist bei diesen vier
+  Feldern ein gültiger Messwert: `BATT=0` heißt „Akku leer“, `WLAN=0` bei
+  MaxVal 0 heißt „bestes Signal“. Eine Loxone-Regel „Warnung, wenn `BATT`
+  unter 20“ sprach deshalb bei jedem Verbindungsabriss an. **Wer solche
+  Regeln hat, prüft sie** — und importiert die Vorlage neu, weil `MinVal`
+  mitgezogen wurde.
+- **`?debug=1` verlangt jetzt ein Token.** Der Aufruf nennt Name und Adresse
+  des Mähers, WLAN-Pegel und den Nullpunkt des Messerwechsels; der Endpunkt
+  liegt im unangemeldeten Bereich.
+- **`?cmd=…&json=1`** wird abgewiesen statt still zu JSON zu werden.
+- **Fehlgeschlagene Befehle antworten nicht mehr mit HTTP 200**, sondern mit
+  400 (Anfrage taugt nicht), 409 (nicht eingerichtet) oder 502 (Gerät hat
+  nicht geliefert).
+- **Der `Comment` der Importvorlage ist kürzer.** Loxone Config macht daraus
+  den Anzeigenamen der Kachel; sechs davon waren ganze Sätze, der längste 95
+  Zeichen. Ein erneuter Import legt **neue** Bausteine an und überschreibt
+  nichts — wer die Namen übernehmen will, löscht die alten selbst.
+
+**Neu:**
+
+- **Messerwechsel je Mäher.** Intervall und Nullpunkt stehen jetzt in der
+  Mäher-Tabelle, zwei Felder je Zeile. Bleibt ein Feld leer, gilt die
+  Vorgabe unter der Tabelle — **bestehende Anlagen ändern sich damit
+  nicht**: jeder Mäher erbt den bisherigen globalen Wert, bis Sie etwas
+  eintragen. Bis 1.1.3 galt ein einziger Nullpunkt für alle, während Kachel
+  und Warnung je Mäher angezeigt wurden; ein Quittieren für Mäher 2
+  verschob den Nullpunkt aller anderen mit. Der Knopf „Messerwechsel
+  quittieren“ hat ab zwei Mähern eine Auswahl, und
+  `?cmd=blade_reset&dev=2&token=…` quittiert gezielt den zweiten.
+
+**Behoben:**
+
+- **`cron.php` war über HTTP ohne Token erreichbar.** Gemessen: ein Aufruf
+  aus dem Netz antwortete HTTP 200 und trieb den Laufzähler über fünf
+  Aufrufe von 1 auf 6. Damit ließ sich genau die Auskunft fälschen, an der
+  der Miniserver einen stehenden Cron erkennt. Der Lauf läuft jetzt nur noch
+  auf der Kommandozeile.
+- **Ohne `php-curl` folgte das Plugin einer Weiterleitung** und schickte die
+  Zugangsdaten des Mähers ein zweites Mal an das Umleitungsziel. Der
+  curl-Zweig verbot das seit jeher; der Ersatzweg tut es jetzt auch.
+- **`?cmd=blade_reset` setzte den Nullpunkt auf 0, wenn der Mäher schwieg** —
+  und meldete `OK=1`. Der echte Nullpunkt war damit fort. Jetzt bleibt er
+  stehen, und die Antwort sagt, warum.
+- **Die Konfiguration wurde im Aktualisierungsfall nie vervollständigt.** Der
+  Reiter Test meldete auf jeder bestehenden Anlage dauerhaft „es fehlen 7 von
+  10“, ohne dass die Oberfläche es je behob.
+- **Die eigene Sicherung wurde abgelehnt**, sobald die Anlage von der
+  Einzelgeräte-Fassung stammte: die Altschlüssel `ip`, `user`, `pass`
+  wanderten mit und galten beim Zurückspielen als „unbekannt“.
+- **Lebenszeichen, Fehlerhistorie und Einsatzstatistik überstehen jetzt ein
+  Update.** Bis 1.1.3 räumte der Installer `data/plugins/<ordner>/` bei jedem
+  Upgrade ab, und `preupgrade.sh` sicherte nur `mower.json` und `mower.log`.
+  Der Laufzähler fing danach bei 0 an — am Miniserver nicht von einem
+  stehengebliebenen Cron zu unterscheiden.
+- **Eine tokenlose, abgewiesene Anfrage legte die Konfigurationsdatei an**,
+  wenn eine Zweitschrift daneben lag — der Zustand nach jedem Upgrade. Der
+  unangemeldete Endpunkt liest jetzt nur.
+- **Vier Zeilen der Themen-Tabelle standen ohne Bedeutung da** (`batterie`,
+  `messer_rest`, `messer_warn`, `temperatur`): der Feldname wurde aus dem
+  Themennamen gerechnet statt zugeordnet.
+- **Die Cron-Sperre war eine Vorprüfung**, kein `flock`; die Abschlussfunktion
+  löschte die Sperre nach Pfad und traf damit die des anderen Laufs.
+- **`cron.01min` warf Ausgabe und Rückgabewert weg.** Ein Fehlschlag geht
+  jetzt ins Protokoll des Plugins.
+- **Der Selbsttest meldete `FASSUNG=1.1.0`**, seit drei Fassungen. Die Nummer
+  kommt jetzt aus der Plugin-Datenbank von LoxBerry.
+- **`?dev=` wurde still zurechtgebogen**: `?dev=99999` lieferte unauffällig
+  die Werte von Mäher 1.
+- Ein **geleertes Adressfeld** verwarf die Mäher-Zeile samt Kennwort, obwohl
+  der Hilfetext daneben zusagte, gelöscht werde nur über den Haken.
+- `?roh=` und `?ptest=` unterscheiden jetzt „kein Token eingerichtet“ von
+  „falsches Token“.
+- Der Auftragsparameter `?p=` wird gegen eine Positivliste geprüft und
+  abgewiesen statt gefiltert; `&` kam bisher durch.
+- `mo_say()` hält eine Verbindungs-Zeitgrenze ein — ohne sie konnte eine
+  Ansage an einen stummen Music-Server den Cron über die Minute ziehen.
+- MQTT-Zeilen tragen ein Zeilenende; ein kurzer Schreibvorgang gilt nicht
+  mehr als Erfolg.
+- Der Arbeitsordner heißt jetzt `/tmp/<ordner>` statt fest `/tmp/robonect` —
+  bei einer Zweitinstallation teilten sich beide Sperrdatei und Zustand.
+- Kleinere Berichtigungen: `mo_kuerzen()` schnitt eine abgeschnittene
+  UTF-8-Folge nicht ab, `json_encode()`-Fehlschläge blieben stumm, eine
+  `mkdir`-Warnung stand in jedem Prüflauf, die Prüzeile „Themenliste gegen
+  den Sendecode“ verglich nichts, tote Reste entfernt.
+
+## Neu in 1.1.1 bis 1.1.3
+
+Zu diesen drei Schritten stand hier nichts. Nachgetragen, gemessen am
+Dateibefund — nicht an einer Absicht:
+
+- **1.1.3** ändert genau einen Sprachwert je Sprache: die Überschrift des
+  Abo-Kastens heißt „Das Abo im MQTT-Gateway“ statt „Dieses Abo im
+  MQTT-Gateway eintragen“. Unter Gateway V2 gibt es nichts einzutragen.
+- **1.1.1 und 1.1.2** lassen sich hier nicht mehr belegen: weder die Ordner
+  noch die Archive liegen im Arbeitsordner. Was sie geändert haben, steht auf
+  ihren Release-Seiten.
+
 ## Neu in 1.1.0
 
 Diese Fassung behebt drei Dinge, die **gemessen** wurden, und ergänzt vier
@@ -59,7 +164,8 @@ Dazu:
   die Steuerbefehle und ein Knopf für die **rohe Antwort** des Moduls.
 - Der Reiter Test hat eine **Selbstprüfung** mit zwölf Zeilen; bisher standen
   dort nur Knöpfe.
-- Der Netzabruf läuft über `curl` mit eigener Verbindungs-Zeitgrenze —
+- Der Netzabruf läuft über `curl`, wenn `php-curl` vorhanden ist, sonst über
+  `file_get_contents` — beide mit eigener Verbindungs-Zeitgrenze —
   `file_get_contents` deckt mit `timeout` nur das Lesen ab, für den
   Verbindungsaufbau galt `default_socket_timeout` mit 60 Sekunden. Ein falsches
   Passwort wird jetzt als solches gemeldet und nicht mehr als „keine
@@ -212,7 +318,7 @@ liefern in beiden Sprachen zeichengleiche Ausgabe ohne eine Meldung.
 - **Steuerung** per einfachem GET: `auto`, `man`, `home`, `eod`, `start`, `stop`
 - **Meldungen** als Ansage (TTS) und/oder Push: Störung, Schleifensignal
   verloren, Mähen beendet, Messerwechsel fällig, Akku unter 20 %
-- Bis zu **2 Mäher**, MQTT, JSON, Protokoll (Passwörter werden maskiert)
+- Bis zu **neun Mäher**, MQTT, JSON, Protokoll (Passwörter werden maskiert)
 - Reiter: Einstellungen, Einbindung in Loxone (mit kompletter Baustein-Liste
   inkl. Regen- und Ruhezeitensperre), Test, Protokoll
 
@@ -221,11 +327,30 @@ liefern in beiden Sprachen zeichengleiche Ausgabe ohne eine Meldung.
 | Aufruf | Zweck |
 |---|---|
 | `/plugins/robonect/mower.php` | Loxone-Zeile `MOWER;OK=..;CODE=..;BATT=..;STUNDEN=..;MESSER=..;…` |
-| `/plugins/robonect/mower.php?debug=1` | Klartext-Übersicht |
 | `/plugins/robonect/mower.php?json=1` | kompletter Zustand als JSON |
-| `/plugins/robonect/mower.php?cmd=auto` | Automatik (auch `man`, `home`, `eod`, `start`, `stop`) |
-| `/plugins/robonect/mower.php?cmd=blade_reset` | Messerwechsel quittieren |
+| `/plugins/robonect/mower.php?refresh=1` | Zwischenspeicher übergehen und frisch messen |
+| `/plugins/robonect/mower.php?dev=2` | zweiter Mäher (1 bis 9; unzulässige Nummern werden mit HTTP 400 abgewiesen) |
+| `/plugins/robonect/mower.php?debug=1&token=…` | Klartext-Übersicht **(Token nötig ab 1.1.4)** |
+| `/plugins/robonect/mower.php?selftest=1&token=…` | prüft nur das Token, löst nichts aus |
+| `/plugins/robonect/mower.php?roh=status&token=…` | rohe Antwort des Moduls (Weißliste, nur lesende Befehle) |
+| `/plugins/robonect/mower.php?cmd=auto&token=…` | Automatik (auch `man`, `home`, `eod`, `start`, `stop`, `job`) |
+| `/plugins/robonect/mower.php?cmd=blade_reset&token=…` | Messerwechsel quittieren |
+| `/plugins/robonect/mower.php?cmd=start&probe=1&token=…` | Trockenlauf: sagt, was gesendet würde |
 | `/plugins/robonect/mower.php?ptest=1&token=…` | Test-Pushnachricht auslösen **(Token nötig ab 1.0.12)** |
+
+**Jeder auslösende Aufruf verlangt `&token=…`** — den Wert zeigt der Reiter
+*Einbindung in Loxone*. Ohne ihn antwortet der Endpunkt mit HTTP 403, und ein
+Virtueller Ausgang meldet das nicht: die Adresse sieht dann aus, als hätte sie
+gewirkt. Bis 1.1.3 standen die Befehlszeilen in dieser Tabelle ohne Token — wer
+sie abschrieb, bekam 403.
+
+`?json=1` lässt sich **nicht** mit einem Befehl verbinden: `?cmd=stop&json=1`
+wird seit 1.1.4 mit HTTP 400 und `ERR=MEHRDEUTIG` abgewiesen. Bis 1.1.3 gewann
+stillschweigend das JSON, und der Befehl geschah nie.
+
+`cron.php` im selben Verzeichnis ist **kein** Endpunkt, sondern der minutliche
+Lauf. Er antwortet seit 1.1.4 nur noch auf der Kommandozeile; ein Aufruf über
+HTTP wird mit HTTP 403 abgewiesen (siehe *Neu in 1.1.4*).
 
 ## Sicherheit
 

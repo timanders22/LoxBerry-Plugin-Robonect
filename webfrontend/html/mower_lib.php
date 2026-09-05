@@ -65,16 +65,16 @@ function mo_paths() {
                      'backup' => $lb . '/config/plugins/' . $pd . '.backup.json',
                      'log' => $lb . '/log/plugins/' . $pd . '/mower.log',
                      'datadir' => $lb . '/data/plugins/' . $pd,
-                     'tmp' => '/tmp/robonect', 'lbhome' => $lb,
+                     'tmp' => '/tmp/' . $pd, 'lbhome' => $lb,
                      // Der Ordnername wird gebraucht, wo eine Adresse auf das
                      // eigene Plugin zeigt - Endpunkt, Vorlage, Selbstpruefung.
                      'plugin' => $pd);
     }
     return array('config' => dirname(dirname(__DIR__)) . '/config/mower.json',
                  'backup' => dirname(dirname(__DIR__)) . '/config/mower.backup.json',
-                 'log' => sys_get_temp_dir() . '/robonect/mower.log',
-                 'datadir' => sys_get_temp_dir() . '/robonect/data',
-                 'tmp' => sys_get_temp_dir() . '/robonect', 'lbhome' => '',
+                 'log' => sys_get_temp_dir() . '/' . $pd . '/mower.log',
+                 'datadir' => sys_get_temp_dir() . '/' . $pd . '/data',
+                 'tmp' => sys_get_temp_dir() . '/' . $pd, 'lbhome' => '',
                  'plugin' => $pd);
 }
 
@@ -87,6 +87,10 @@ function mo_vorgaben()
     return array(
     'mowers' => array(),          // [{name, ip, user, pass}]
     'cache_sec' => 20,
+    /* Seit 1.1.4 die VORGABE fuer Maeher ohne eigenen Wert; je Maeher
+     * stehen dieselben beiden Schluessel im Eintrag unter 'mowers'. Sie
+     * bleiben hier, weil sonst jede aeltere Sicherungsdatei als "unbekannte
+     * Einstellung" abgewiesen wuerde. */
     'blade_hours' => 200,         // Messerwechsel-Intervall in Betriebsstunden
     'blade_base' => 0,            // Betriebsstunden beim letzten Messerwechsel
     'mqtt_enabled' => 0,
@@ -120,11 +124,124 @@ function mo_max_maeher() { return 9; }
  */
 function mo_cfg_vervollstaendigen(&$cfg)
 {
+    /* A4 (04.09.2026, gemessen): bis 1.1.3 wurde $cfg geprueft - also das
+     * Ergebnis von mo_config(), und das ergaenzt die Vorgaben BEREITS
+     * ($cfg += mo_vorgaben()). array_key_exists() fand darin nie eine
+     * Luecke, die Rueckgabe war strukturell leer, und der Schreibzweig in
+     * index.php lief nie an. Gemessen im Aktualisierungsfall: Datei mit drei
+     * Schluesseln, Oberflaeche einmal geoeffnet, 177 Byte vorher wie
+     * nachher - waehrend der Reiter Test "es fehlen 7 von 10" meldete. Eine
+     * rote Zeile bei jedem Oeffnen ist eine abgeschaltete Pruefung.
+     *
+     * Gemessen wird jetzt, was in der DATEI steht. Ergaenzt wird $cfg
+     * weiterhin, damit der erste Lauf nicht stirbt. */
+    $p = mo_paths();
+    $roh = is_file($p['config'])
+        ? json_decode((string) @file_get_contents($p['config']), true) : null;
+    if (!is_array($roh)) { $roh = array(); }
     $fehlten = array();
     foreach (mo_vorgaben() as $k => $v) {
-        if (!array_key_exists($k, $cfg)) { $cfg[$k] = $v; $fehlten[] = $k; }
+        if (!array_key_exists($k, $roh)) { $fehlten[] = $k; }
+        if (!array_key_exists($k, $cfg)) { $cfg[$k] = $v; }
     }
     return $fehlten;
+}
+
+/**
+ * Die Fassung des Plugins - aus EINER Quelle, und zwar der, die auch
+ * LoxBerry benutzt.
+ *
+ * A8 (04.09.2026, gemessen): der Endpunkt antwortete auf ?selftest=1 mit
+ * "FASSUNG=1.1.0", waehrend alle drei .cfg 1.1.3 nannten - die Zahl stand
+ * fest im Quelltext. Genau die Zeile, mit der man am Geraet feststellt,
+ * welcher Stand antwortet, sagte seit drei Fassungen etwas Falsches.
+ *
+ * Eine PHP-Konstante waere eine zweite Quelle: das Hauswerkzeug, das die
+ * Fassungsnummer setzt, kennt die drei .cfg und die README - eine Konstante
+ * zoege es nicht mit, und sie liefe genauso auseinander.
+ *
+ * Rueckgabe: die Nummer, oder '' wenn sie nicht feststellbar ist. Leer heisst
+ * leer und wird nicht durch eine geratene Zahl ersetzt.
+ */
+function mo_fassung()
+{
+    static $v = null;
+    if ($v !== null) { return $v; }
+    $v = '';
+    $p = mo_paths();
+    if ($p['lbhome'] !== '') {
+        /* Der Schluessel der Plugin-Datenbank entsteht aus Autorenname,
+         * E-Mail und Plugin-Namen und aendert sich bei einem Fork - gesucht
+         * wird deshalb ueber den ORDNERNAMEN, nicht ueber den Schluessel. */
+        $db = $p['lbhome'] . '/data/system/plugindatabase.json';
+        if (is_file($db)) {
+            $j = json_decode((string) @file_get_contents($db), true);
+            if (is_array($j) && isset($j['plugins']) && is_array($j['plugins'])) {
+                foreach ($j['plugins'] as $e) {
+                    if (is_array($e) && isset($e['folder'], $e['version'])
+                        && (string) $e['folder'] === (string) $p['plugin']) {
+                        $v = (string) $e['version'];
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    if ($v === '') {
+        // Ausgepacktes Archiv: die plugin.cfg liegt drei Ebenen hoeher.
+        $cfg = dirname(dirname(dirname(__DIR__))) . '/plugin.cfg';
+        if (!is_file($cfg)) { $cfg = dirname(dirname(__DIR__)) . '/plugin.cfg'; }
+        if (is_file($cfg)) {
+            $roh = (string) @file_get_contents($cfg);
+            if (preg_match('/^VERSION=([^\r\n]+)/m', $roh, $m)) { $v = trim($m[1]); }
+        }
+    }
+    return $v;
+}
+
+/**
+ * Thema (klein, ausgeschrieben) -> Name des Feldes in der Statuszeile.
+ *
+ * A9 (04.09.2026, gemessen am gerenderten HTML): die Tabelle im Reiter MQTT
+ * rechnete den Feldnamen mit strtoupper() aus dem Themennamen. Das geht bei
+ * den meisten auf und bei vier nicht - 'batterie' ergibt BATTERIE, das Feld
+ * heisst BATT; ebenso messer_rest/MESSER, messer_warn/MESSERWARN,
+ * temperatur/TEMP. Vier von 55 Zeilen standen ohne Bedeutung da, und der
+ * Ausfall war stumm: die Zeile erschien, nur die Spalte blieb leer.
+ *
+ * Ausgeschrieben statt gerechnet, und die Themenliste entsteht aus dieser
+ * Tafel - damit gibt es die Zuordnung genau einmal. Leerer Wert heisst
+ * ausdruecklich "kein Zahlenfeld": 'status' ist der Klartext.
+ */
+function mo_thema_feld()
+{
+    return array(
+        'ok' => 'OK', 'code' => 'CODE', 'status' => '', 'modus' => 'MODUS',
+        'batterie' => 'BATT', 'maeht' => 'MAEHT', 'laedt' => 'LAEDT',
+        'fehler' => 'FEHLER', 'stunden' => 'STUNDEN', 'dauer' => 'DAUER',
+        'messer_rest' => 'MESSER', 'messer_warn' => 'MESSERWARN',
+        'temperatur' => 'TEMP', 'feuchte' => 'FEUCHTE', 'wlan' => 'WLAN',
+        'timer' => 'TIMER',
+    );
+}
+
+/**
+ * Beschriftung eines Feldes fuer die Oberflaeche: die kurze Beschriftung,
+ * und die lange Erklaerung dahinter, wenn es eine gibt.
+ *
+ * A11: die fuenfte Spalte von mo_felder() wird als Comment in die
+ * Importvorlage geschrieben, und daraus macht Loxone Config den
+ * ANZEIGENAMEN der Kachel. Sechs davon waren ganze Saetze (bis 95 Zeichen).
+ * Die Beschriftung ist deshalb kurz; was zu erklaeren bleibt, steht in der
+ * sechsten Spalte und erscheint nur in der Oberflaeche.
+ */
+function mo_feld_text($name)
+{
+    $f = mo_felder();
+    if (!isset($f[$name])) { return ''; }
+    $t = (string) $f[$name][4];
+    if (isset($f[$name][5]) && $f[$name][5] !== '') { $t .= ' (' . $f[$name][5] . ')'; }
+    return $t;
 }
 
 /**
@@ -199,7 +316,20 @@ function mo_zweitschrift_schreiben($cfg)
     return $ok;
 }
 
-function mo_config(&$zustand = null) {
+/**
+ * $erzeugen = false: NUR LESEN. Der unangemeldete Endpunkt ruft so.
+ *
+ * A6 (04.09.2026, gemessen): eine tokenlose, korrekt mit HTTP 403
+ * abgewiesene Anfrage an mower.php legte config/plugins/<ordner>/mower.json
+ * an - 262 Byte, mit Kennwort und Aktionstoken, aus der Zweitschrift
+ * geheilt. Bedingung: Konfigordner fort, Zweitschrift daneben vorhanden.
+ * Das ist kein Sonderfall, sondern der Zustand nach JEDEM Upgrade:
+ * purge_installation raeumt den Ordner ab, die Zweitschrift daneben
+ * ueberlebt. Ohne Zweitschrift entstand nichts - der Schutz selbst greift.
+ *
+ * Die Selbstheilung ist richtig; sie gehoert nur hinter die Anmeldung.
+ */
+function mo_config(&$zustand = null, $erzeugen = true) {
     static $gemeldet = false;
     /* GEMESSEN beim Bauen dieser Fassung: die Zeile im Reiter Test meldete
      * "in Ordnung", obwohl die Datei beschaedigt war. Grund: der ERSTE
@@ -248,9 +378,15 @@ function mo_config(&$zustand = null) {
              * naechsten Mal wieder in dieselbe Datei. Bei einer beschaedigten
              * Datei wird sie ueberschrieben - das Original steht als .kaputt
              * daneben. */
-            @mkdir(dirname($p['config']), 0775, true);
-            $js = json_encode($cfg, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-            if ($js !== false) { mo_write_atomic($p['config'], $js, 0600); }
+            /* A18: is_dir() davor. Ohne die Wache meldete jeder Pruef-
+             * lauf unter PHP 7.4 "mkdir(): File exists" - eine Meldung,
+             * die keine ist, und die naechste echte geht darin unter.
+             * A6: geschrieben wird nur, wenn der Aufrufer es darf. */
+            if ($erzeugen) {
+                if (!is_dir(dirname($p['config']))) { @mkdir(dirname($p['config']), 0775, true); }
+                $js = json_encode($cfg, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+                if ($js !== false) { mo_write_atomic($p['config'], $js, 0600); }
+            }
         } else {
             $cfg = array();
             if ($zustand === 'kaputt') { $zustand = 'kaputt_ohne_zweitschrift'; }
@@ -268,6 +404,13 @@ function mo_config(&$zustand = null) {
         $cfg['mowers'] = array(array('name' => 'Rasenmaeher', 'ip' => (string) $cfg['ip'],
             'user' => (string) (isset($cfg['user']) ? $cfg['user'] : ''), 'pass' => (string) (isset($cfg['pass']) ? $cfg['pass'] : '')));
     }
+    /* A5 (04.09.2026, gemessen): die Altschluessel wurden gelesen, aber nicht
+     * entfernt. Ueber "$neu = $cfg" beim Speichern wanderten sie zurueck in
+     * die Datei, die Sicherung nahm sie mit - und die Lesefunktion wies die
+     * EIGENE Sicherung als "Unbekannte Einstellung: ip, user, pass" ab. Der
+     * Umzug auf einen zweiten LoxBerry scheiterte damit genau bei den
+     * Anlagen, die schon laenger laufen. Die Migration raeumt jetzt auf. */
+    unset($cfg['ip'], $cfg['user'], $cfg['pass']);
     if (!is_array($cfg['notify'])) { $cfg['notify'] = array(); }
     if (!is_array($cfg['tts'])) { $cfg['tts'] = array(); }
     $cfg['notify'] += array('audio' => 0, 'push' => 0, 'fehler' => 1, 'fertig' => 1, 'messer' => 1, 'akku' => 0);
@@ -278,19 +421,58 @@ function mo_config(&$zustand = null) {
 
 function mo_mowers() {
     $cfg = mo_config();
+    /* Messerwechsel je Maeher (1.1.4): die beiden globalen Schluessel sind
+     * jetzt die VORGABE. Traegt ein Maeher eigene Werte, gelten seine.
+     * Traegt er keine, erbt er die Vorgabe - und verhaelt sich damit genau
+     * wie bisher. Das ist der Aktualisierungsfall, und er darf sich nicht
+     * still aendern. */
+    $iv_vor = max(1, (int) $cfg['blade_hours']);
+    $np_vor = max(0, (int) $cfg['blade_base']);
     $out = array(); $n = 0;
     foreach ((array) $cfg['mowers'] as $m) {
         $m = (array) $m;
         if (trim((string) (isset($m['ip']) ? $m['ip'] : '')) === '') { continue; }
         $n++;
+        $eigen_iv = isset($m['blade_hours']) && $m['blade_hours'] !== '';
+        $eigen_np = isset($m['blade_base']) && $m['blade_base'] !== '';
         $out[$n] = array('name' => trim((string) (isset($m['name']) ? $m['name'] : '')) !== '' ? trim((string) $m['name']) : ('Rasenmaeher ' . $n),
                          'ip' => trim((string) $m['ip']),
                          'user' => (string) (isset($m['user']) ? $m['user'] : ''),
-                         'pass' => (string) (isset($m['pass']) ? $m['pass'] : ''));
+                         'pass' => (string) (isset($m['pass']) ? $m['pass'] : ''),
+                         'blade_hours' => $eigen_iv ? max(1, (int) $m['blade_hours']) : $iv_vor,
+                         'blade_base'  => $eigen_np ? max(0, (int) $m['blade_base']) : $np_vor,
+                         /* Damit die Oberflaeche "eigener Wert" von "geerbt"
+                          * unterscheiden kann, ohne die Rohdaten ein zweites
+                          * Mal auszuwerten. */
+                         'blade_eigen' => ($eigen_iv || $eigen_np) ? 1 : 0);
     }
     return $out;
 }
 function mo_mower($n) { $m = mo_mowers(); $n = max(1, (int) $n); return isset($m[$n]) ? $m[$n] : null; }
+
+/**
+ * Vom gezaehlten Maeher zurueck auf seine Stelle in der Konfigurationsdatei.
+ *
+ * mo_mowers() ueberspringt Zeilen ohne Adresse und zaehlt die uebrigen ab 1.
+ * Wer in die ROHE Konfiguration schreibt, braucht denselben Weg rueckwaerts -
+ * und er steht deshalb hier genau einmal. Die Zaehlung noch einmal
+ * hinzuschreiben waere eine zweite Wahrheit; laeuft sie auseinander, schreibt
+ * ein Quittieren den Nullpunkt des falschen Maehers.
+ *
+ * Rueckgabe: der Schluessel im Feld $roh['mowers'], oder null.
+ */
+function mo_mower_pos($roh, $dev)
+{
+    if (!is_array($roh) || !isset($roh['mowers']) || !is_array($roh['mowers'])) { return null; }
+    $k = 0;
+    foreach ($roh['mowers'] as $i => $m) {
+        $m = (array) $m;
+        if (trim((string) (isset($m['ip']) ? $m['ip'] : '')) === '') { continue; }
+        $k++;
+        if ($k === max(1, (int) $dev)) { return $i; }
+    }
+    return null;
+}
 
 /**
  * Zufallstoken fuer die schaltenden Aufrufe (?cmd=).
@@ -494,9 +676,18 @@ function mo_api_roh($cmd, $dev = 1, $extra = '', $tmo = 3) {
          * danach zurueckgestellt. Sonst wartet der Aufruf bis zu 60 s. */
         $alt = ini_get('default_socket_timeout');
         @ini_set('default_socket_timeout', (string) max(1, (int) $tmo));
+        /* A2 (04.09.2026, gemessen): der curl-Zweig verbietet Weiterleitungen
+         * (CURLOPT_FOLLOWLOCATION false), dieser hier tat es nicht.
+         * file_get_contents folgt ab Werk bis zu zwanzigmal UND schickt die
+         * Kopfzeile "Authorization: Basic" erneut mit. An einer Attrappe
+         * gemessen: ohne curl kamen Benutzername und Kennwort des Maehers am
+         * Umleitungsziel an, mit curl nicht. Zwei Abrufwege muessen sich
+         * gleich verhalten - sonst haengt die Sicherheit daran, welche
+         * Erweiterungen zufaellig installiert sind. */
         $ctx = stream_context_create(array('http' => array(
             'timeout' => $tmo, 'header' => implode("\r\n", $kopf) . "\r\n",
-            'user_agent' => 'LoxBerry Robonect', 'ignore_errors' => true)));
+            'user_agent' => 'LoxBerry Robonect', 'ignore_errors' => true,
+            'follow_location' => 0, 'max_redirects' => 1)));
         $r = @file_get_contents($url, false, $ctx);
         if (isset($http_response_header) && is_array($http_response_header)
             && isset($http_response_header[0])
@@ -570,7 +761,20 @@ function mo_write_atomic($datei, $inhalt, $rechte = 0644) {
     return true;
 }
 function mo_write_json($datei, $daten) {
-    return mo_write_atomic($datei, json_encode($daten));
+    /* B3 (04.09.2026): json_encode() gibt bei ungueltigem UTF-8 false
+     * zurueck, mo_write_atomic() bricht dann sauber ab - und der Rueckgabe-
+     * wert wurde an sieben Stellen verworfen. Ein einziges Latin-1-Zeichen
+     * in einer Fehlermeldung des Moduls haette die Fehlerhistorie ab da
+     * stumm nicht mehr geschrieben. JSON_INVALID_UTF8_SUBSTITUTE gibt es
+     * seit PHP 7.2; ein ersetztes Zeichen ist besser als eine Datei, die
+     * nicht mehr waechst. Scheitert es trotzdem, sagt es das - einmal. */
+    $js = json_encode($daten, JSON_INVALID_UTF8_SUBSTITUTE);
+    if ($js === false) {
+        mo_log_if_changed('json_' . basename($datei),
+            'nicht geschrieben - ' . json_last_error_msg());
+        return false;
+    }
+    return mo_write_atomic($datei, $js);
 }
 
 /** Robonect-Statuscode -> Klartext. */
@@ -596,11 +800,21 @@ function mo_state($dev = 1, $force = false) {
         $c = json_decode((string) file_get_contents($cache), true);
         if (is_array($c)) { return $c; }
     }
+    /* A10 (04.09.2026, gemessen): bis 1.1.3 bekamen batterie, temperatur,
+     * feuchte und wlan bei fehlender Verbindung eine 0 - waehrend code,
+     * modus und messer_rest richtig -1 bekamen. Eine 0 ist bei diesen vier
+     * aber ein GUELTIGER Messwert: BATT=0 heisst in Loxone "Akku leer",
+     * WLAN=0 bei MaxVal 0 heisst "bestes Signal", TEMP=0.0 heisst 0 Grad.
+     * Eine Loxone-Regel "Warnung, wenn BATT unter 20" sprach damit bei jedem
+     * Verbindungsabriss an. Wo die Spanne es hergibt, gilt jetzt -1; wo -1
+     * ein gueltiger Messwert waere (Temperatur, Signalstaerke), -999. Die
+     * MinVal-Angaben in mo_felder() sind mitgezogen - ein Fehlwert, den die
+     * Vorlage abschneidet, wird zu einem falschen Messwert. */
     $st = array('ok' => 0, 'name' => $m ? $m['name'] : '-', 'code' => -1, 'text' => 'keine Verbindung',
-                'modus' => -1, 'modus_text' => '-', 'batterie' => 0, 'laedt' => 0,
+                'modus' => -1, 'modus_text' => '-', 'batterie' => -1, 'laedt' => 0,
                 'fehler' => 0, 'fehlertext' => '', 'stunden' => 0, 'dauer' => 0,
-                'messer_rest' => -1, 'messer_warn' => 0, 'temperatur' => 0, 'feuchte' => 0,
-                'wlan' => 0, 'timer' => 0, 'maeht' => 0, 'ts' => time(),
+                'messer_rest' => -1, 'messer_warn' => 0, 'temperatur' => -999, 'feuchte' => -1,
+                'wlan' => -999, 'timer' => 0, 'maeht' => 0, 'ts' => time(),
                 /* Warum das Nichterreichen einen GRUND braucht (D4, 26.08.2026):
                  * bis 1.0.13 sah ein falsches Passwort genauso aus wie ein
                  * totes Geraet - beide Male stand hier "keine Verbindung",
@@ -647,8 +861,12 @@ function mo_state($dev = 1, $force = false) {
         if (isset($h['health']['humidity'])) { $st['feuchte'] = round((float) $h['health']['humidity'], 1); }
     }
     // Messerlaufzeit seit dem letzten Wechsel
-    $iv = max(1, (int) $cfg['blade_hours']);
-    $base = max(0, (int) $cfg['blade_base']);
+    /* je Maeher, mit Rueckfall auf die Vorgabe - aufgeloest in mo_mowers().
+     * Bis 1.1.3 stand hier der globale Wert, waehrend Kachel und Warnung je
+     * Maeher angezeigt wurden: fuer jeden Maeher ausser dem zuletzt
+     * quittierten war die Restlaufzeit nicht belegt. */
+    $iv = ($m !== null) ? max(1, (int) $m['blade_hours']) : max(1, (int) $cfg['blade_hours']);
+    $base = ($m !== null) ? max(0, (int) $m['blade_base']) : max(0, (int) $cfg['blade_base']);
     if ($st['stunden'] > 0) {
         $st['messer_rest'] = max(0, $iv - max(0, $st['stunden'] - $base));
         $st['messer_warn'] = $st['messer_rest'] <= 0 ? 1 : 0;
@@ -679,7 +897,35 @@ function mo_command($cmd, $dev = 1, $param = '', $probe = false) {
                  'eod' => array('mode', 'mode=eod'), 'start' => array('start', ''),
                  'stop' => array('stop', ''));
     if ($cmd === 'job') {
-        $p = preg_replace('/[^0-9a-z=&%\-]/i', '', (string) $param);
+        /* B4 (04.09.2026): bis 1.1.3 wurden unzulaessige Zeichen ENTFERNT -
+         * aus "start=8:00" wurde still "start=800", und der Anwender erfuhr
+         * nichts. Schlimmer: "&" und "=" blieben stehen und gingen roh in die
+         * Adresse des Moduls, ein zweites "cmd=" liess sich also anhaengen.
+         * Jetzt eine Positivliste je Teil, und was nicht passt, wird
+         * abgewiesen und benannt - nicht zurechtgebogen. */
+        $p = '';
+        $roh = trim((string) $param);
+        if ($roh !== '') {
+            $erlaubt = array('start', 'end', 'duration', 'after');
+            $teile = array();
+            foreach (explode('&', $roh) as $stueck) {
+                if ($stueck === '') { continue; }
+                if (strpos($stueck, '=') === false) {
+                    return array(0, 'Unzulaessiger Auftragsparameter: ' . mo_kuerzen($stueck, 40));
+                }
+                list($k, $v) = explode('=', $stueck, 2);
+                $k = strtolower(trim($k));
+                if (!in_array($k, $erlaubt, true)) {
+                    return array(0, 'Unbekannter Auftragsparameter: ' . mo_kuerzen($k, 40)
+                                  . ' (erlaubt: ' . implode(', ', $erlaubt) . ')');
+                }
+                if (preg_match('/^[0-9A-Za-z:.\-]{1,16}$/', $v) !== 1) {
+                    return array(0, 'Unzulaessiger Wert fuer ' . $k . ': ' . mo_kuerzen($v, 40));
+                }
+                $teile[] = rawurlencode($k) . '=' . rawurlencode($v);
+            }
+            $p = implode('&', $teile);
+        }
         $ziel = array('mode', 'mode=job' . ($p !== '' ? '&' . $p : ''));
     } elseif (isset($map[$cmd])) {
         $ziel = $map[$cmd];
@@ -704,16 +950,30 @@ function mo_command($cmd, $dev = 1, $param = '', $probe = false) {
 function mo_blade_reset($dev = 1) {
     $p = mo_paths();
     $st = mo_state($dev, true);
+    /* A3 (04.09.2026, gemessen): ohne diese Zeile schrieb ein Quittieren bei
+     * stummem Maeher den Nullpunkt auf 0 - mo_state() liefert dann
+     * 'stunden' => 0 - und meldete trotzdem OK=1. Gemessen: Nullpunkt 830
+     * wurde 0; mit erreichbarem Maeher (12 h) wurde er richtig 12. Die
+     * Antwort war in beiden Faellen dieselbe. Der echte Nullpunkt steht
+     * nirgends sonst; einmal fort, ist er fort. */
+    if (empty($st['ok'])) { return 0; }
     $raw = json_decode((string) @file_get_contents($p['config']), true);
     if (!is_array($raw)) { return 0; }
-    $raw['blade_base'] = (int) $st['stunden'];
+    /* Der Nullpunkt gehoert dem Maeher, nicht der Anlage. Ohne die
+     * Rueckrechnung ueber mo_mower_pos() traefe eine Zeile ohne Adresse die
+     * Zaehlung, und quittiert wuerde der falsche Maeher. */
+    $pos = mo_mower_pos($raw, $dev);
+    if ($pos === null) { return 0; }
+    if (!is_array($raw['mowers'][$pos])) { $raw['mowers'][$pos] = (array) $raw['mowers'][$pos]; }
+    $raw['mowers'][$pos]['blade_base'] = (int) $st['stunden'];
     /* Ueber den gemeinsamen Schreibweg: unteilbar, mit Rechten am Anlegen,
      * und die Zweitschrift geht durch die Wache. Bis 1.0.13 stand hier ein
      * file_put_contents() - der Cron konnte gleichzeitig lesen - und ein
      * blankes copy() auf die Zweitschrift. */
     if (!mo_config_speichern($raw)) { return 0; }
     @unlink(mo_tmpdir() . '/state_' . (int) $dev . '.json');
-    mo_log('Messerwechsel quittiert - neuer Nullpunkt: ' . (int) $st['stunden'] . ' Betriebsstunden');
+    mo_log('Messerwechsel quittiert fuer ' . $st['name'] . ' - neuer Nullpunkt: '
+           . (int) $st['stunden'] . ' Betriebsstunden');
     return 1;
 }
 
@@ -779,7 +1039,14 @@ function mo_mqtt_senden($port, array $zeilen)
     stream_set_timeout($fp, 2);
     $n = 0;
     foreach ($zeilen as $z) {
-        if (@fwrite($fp, $z) !== false) { $n++; }
+        /* B2 (04.09.2026): ohne Zeilenende. Der Kopfkommentar dieser Datei
+         * begruendet die ganze Wertsaeuberung damit, dass das Gateway
+         * ZEILENWEISE liest - dann gehoert der Abschluss dazu. Ob der
+         * UDP-Eingang ein Datagramm ohne "\n" annimmt, ist an dieser Anlage
+         * nicht gemessen; ein angehaengtes Zeilenende schadet in keinem Fall.
+         * Gezaehlt wird ausserdem der KURZE Schreibvorgang als Fehlschlag. */
+        $z .= "\n";
+        if (@fwrite($fp, $z) === strlen($z)) { $n++; }
     }
     fclose($fp);
     return $n;
@@ -1089,8 +1356,19 @@ function mo_say($text) {
     $url = mo_tts_url($text);
     if ($url === null) { mo_log('Ansage: Modus Audioserver - Ausgabe ueber Loxone Config'); return false; }
     if ($url === '') { mo_log('Ansage uebersprungen: keine TTS-IP konfiguriert'); return false; }
-    $ctx = stream_context_create(array('http' => array('timeout' => 10)));
+    /* B1 (04.09.2026): 'timeout' deckt nur das LESEN. Fuer den
+     * Verbindungsaufbau gilt default_socket_timeout - ab Werk sechzig
+     * Sekunden. mo_api_roh() ist deshalb schon berichtigt, mo_say() war es
+     * nicht: ein eingetragener, aber Pakete verwerfender Music-Server haette
+     * einen Cron-Durchlauf bis zu einer Minute aufgehalten, der naechste
+     * waere an der Sperre abgeprallt und das Lebenszeichen ausgeblieben.
+     * Dieselben drei Sekunden wie beim Maeher, dieselbe Rueckstellung. */
+    $alt = ini_get('default_socket_timeout');
+    @ini_set('default_socket_timeout', '3');
+    $ctx = stream_context_create(array('http' => array(
+        'timeout' => 5, 'follow_location' => 0, 'max_redirects' => 1)));
     $r = @file_get_contents($url, false, $ctx);
+    @ini_set('default_socket_timeout', (string) $alt);
     mo_log('Ansage gesendet: "' . $text . '" -> ' . ($r !== false ? 'OK' : 'FEHLER'));
     return $r !== false;
 }
@@ -1137,7 +1415,7 @@ function mo_events_check() {
         $prev = is_file($f) ? (json_decode((string) file_get_contents($f), true) ?: array()) : array();
         $pcode = isset($prev['code']) ? (int) $prev['code'] : -99;
         $maeh_start = isset($prev['maeh_start']) ? (int) $prev['maeh_start'] : 0;
-        $meldung = '';
+        $meldungen = array();
         // Fehler (Statuswechsel nach 7 oder Schleifensignal verloren)
         if (in_array($st['code'], array(7, 8), true) && $pcode !== $st['code']) {
             /* C6: der WECHSEL wird vermerkt, nicht jeder Durchlauf - sonst
@@ -1148,7 +1426,7 @@ function mo_events_check() {
                 $st['fehlertext'] !== '' ? $st['fehlertext']
                                          : ($st['code'] === 8 ? 'Schleifensignal verloren' : 'Fehler'));
             if (!empty($cfg['notify']['fehler'])) {
-                $meldung = 'Achtung: ' . $st['name'] . ' meldet '
+                $meldungen[] = 'Achtung: ' . $st['name'] . ' meldet '
                          . ($st['code'] === 8 ? 'Schleifensignal verloren' : 'einen Fehler')
                          . ($st['fehlertext'] !== '' ? ': ' . $st['fehlertext'] : '.');
             }
@@ -1161,14 +1439,31 @@ function mo_events_check() {
          * und eine Zahl, die richtig aussieht und geraten ist, gehoert nicht
          * in eine Statistik. Gemessen wird zwischen dem ersten und dem
          * letzten Durchlauf mit Code 2. */
+        /* A21 (05.09.2026, am Wortlaut gemessen): bis 1.1.3 verlangte der
+         * Endezweig, dass der NAECHSTE gesehene Code 1, 3 oder 4 ist. Die
+         * Statustabelle dieser Datei kennt aber auch 5 (sucht), 6 (Abschluss
+         * der Bearbeitung), 8, 16, 17, 18 und -1 bei Verbindungsabriss. Geht
+         * der Maeher den regulaeren Weg 2 -> 6 -> 3, ist beim ersten
+         * Durchlauf $pcode = 2 und der Code 6 - kein Treffer; beim zweiten
+         * ist $pcode = 6 - wieder keiner. Der Einsatz wurde dann NIE als
+         * beendet erkannt: die Statistik zaehlte ihn nicht, die Meldung
+         * "ist fertig" blieb aus, und $maeh_start blieb stehen, sodass auch
+         * der naechste Einsatz keine neue Messung beginnen konnte.
+         *
+         * Richtig ist: beendet ist, was vorher gemaeht hat und jetzt nicht
+         * mehr maeht - solange ueberhaupt gemessen wurde. Bei -1 (keine
+         * Verbindung) wissen wir nichts und lassen die Uhr laufen. */
         if ($st['code'] === 2 && $maeh_start === 0) { $maeh_start = time(); }
-        if ($pcode === 2 && in_array($st['code'], array(1, 3, 4), true)) {
+        /* Eine stehengebliebene Uhr wird verworfen, statt irgendwann eine
+         * Laufzeit von Tagen in die Statistik zu schreiben. */
+        if ($maeh_start > 0 && time() - $maeh_start > 86400) { $maeh_start = 0; }
+        if ($pcode === 2 && $st['code'] !== 2 && $st['code'] >= 0) {
             $min = ($maeh_start > 0) ? (int) round((time() - $maeh_start) / 60) : 0;
             if ($min <= 0 && (int) $st['dauer'] > 0) { $min = (int) $st['dauer']; }
             mo_stat_einsatz($min);
             $maeh_start = 0;
             if (!empty($cfg['notify']['fertig'])) {
-                $meldung = $st['name'] . ' ist mit dem Maehen fertig.'
+                $meldungen[] = $st['name'] . ' ist mit dem Maehen fertig.'
                          . ($min > 0 ? ' Laufzeit ' . $min . ' Minuten.' : '');
             }
         }
@@ -1178,7 +1473,7 @@ function mo_events_check() {
             $af = mo_tmpdir() . '/akku_' . $n . '_' . date('Ymd');
             if (!is_file($af)) {
                 @file_put_contents($af, '1');
-                $meldung = $st['name'] . ': Akku nur noch ' . (int) $st['batterie'] . ' Prozent.';
+                $meldungen[] = $st['name'] . ': Akku nur noch ' . (int) $st['batterie'] . ' Prozent.';
             }
         }
         // Messerwechsel faellig (hoechstens einmal taeglich)
@@ -1186,11 +1481,18 @@ function mo_events_check() {
             $mf = mo_tmpdir() . '/messer_' . $n . '_' . date('Ymd');
             if (!is_file($mf)) {
                 @file_put_contents($mf, '1');
-                $meldung = $st['name'] . ': Messerwechsel faellig - seit dem letzten Wechsel sind '
-                         . max(0, (int) $st['stunden'] - (int) $cfg['blade_base']) . ' Betriebsstunden vergangen.';
+                $meldungen[] = $st['name'] . ': Messerwechsel faellig - seit dem letzten Wechsel sind '
+                         . max(0, (int) $st['stunden'] - (int) $mw['blade_base']) . ' Betriebsstunden vergangen.';
             }
         }
-        if ($meldung !== '') {
+        /* A20 (05.09.2026, am Wortlaut gemessen): bis 1.1.3 wies jeder der
+         * vier Zweige $meldung ZU, statt anzuhaengen - der spaetere gewann.
+         * Traten Fehler und schwacher Akku im selben Durchlauf auf, ging die
+         * Fehlermeldung verloren. Entscheidend: die Merkerdateien (akku_,
+         * messer_) werden VOR der Zuweisung angelegt, die unterdrueckte
+         * Meldung wurde an diesem Tag also auch nicht wiederholt. */
+        if ($meldungen) {
+            $meldung = implode(' ', $meldungen);
             @touch(mo_tmpdir() . '/ann_' . $n);
             @file_put_contents(mo_tmpdir() . '/anntext_' . $n, $meldung);
             mo_log('Meldung: ' . $meldung);
@@ -1304,29 +1606,44 @@ function mo_check($feld) { return '\i;' . $feld . '=\i\v'; }
 function mo_felder() {
     $cfg = mo_config();
     $f = array(
+        /* Aufbau je Feld: analog, MinVal, MaxVal, Einheit,
+         *                 KURZE Beschriftung (wird der Kachelname in Loxone),
+         *                 lange Erklaerung (nur in der Oberflaeche, optional).
+         * Die fuenfte Spalte wandert als Comment in die Importvorlage, und
+         * Loxone Config macht daraus den Anzeigenamen - deshalb kurz. */
         'OK'         => array(0, 0, 1,    '',    '1 = Maeher erreichbar'),
-        'CODE'       => array(1, -1, 99,  '',    'Statuszahl des Maehers (Robonect-Status), -1 = keine Verbindung'),
-        'MODUS'      => array(1, -1, 99,  '',    'Betriebsmodus (Auto, Manuell, Zuhause, ...), -1 = unbekannt'),
-        'BATT'       => array(1, 0, 100,  '%',   'Batterie in Prozent'),
+        'CODE'       => array(1, -1, 99,  '',    'Statuszahl des Maehers',
+                              'Robonect-Status, -1 = keine Verbindung'),
+        'MODUS'      => array(1, -1, 99,  '',    'Betriebsmodus',
+                              'Auto, Manuell, Zuhause, Auftrag; -1 = unbekannt'),
+        'BATT'       => array(1, -1, 100, '%',   'Batterie in Prozent',
+                              '-1 = nicht bekannt, der Maeher antwortet nicht'),
         'MAEHT'      => array(0, 0, 1,    '',    '1 = maeht gerade'),
         'LAEDT'      => array(0, 0, 1,    '',    '1 = laedt gerade'),
         'FEHLER'     => array(1, 0, 10000,'',    'Fehlercode (0 = kein Fehler)'),
         'STUNDEN'    => array(1, 0, 100000,'h',  'Maehstunden gesamt'),
         'DAUER'      => array(1, 0, 10000,'min', 'Dauer des laufenden Einsatzes'),
-        'MESSER'     => array(1, -1, 10000,'h',  'Messer: Reststunden bis zum Wechsel, -1 = nicht bekannt'),
+        'MESSER'     => array(1, -1, 10000,'h',  'Messer: Reststunden',
+                              'bis zum Wechsel, -1 = nicht bekannt'),
         'MESSERWARN' => array(0, 0, 1,    '',    '1 = Messerwechsel faellig'),
-        'TEMP'       => array(1, -30, 80, 'GradC','Temperatur am Maeher'),
-        'FEUCHTE'    => array(1, 0, 100,  '%',   'Luftfeuchte am Maeher'),
-        'WLAN'       => array(1, -100, 0, 'dBm', 'WLAN-Signalstaerke'),
+        'TEMP'       => array(1, -999, 80, 'GradC','Temperatur am Maeher',
+                              '-999 = nicht bekannt; -1 waere hier ein gueltiger Messwert'),
+        'FEUCHTE'    => array(1, -1, 100,  '%',  'Luftfeuchte am Maeher',
+                              '-1 = nicht bekannt'),
+        'WLAN'       => array(1, -999, 0, 'dBm', 'WLAN-Signalstaerke',
+                              '-999 = nicht bekannt; 0 waere hier das beste Signal'),
         'TIMER'      => array(0, 0, 1,    '',    '1 = Timer aktiv'),
         'ANN'        => array(0, 0, 1,    '',    'Meldefenster aktiv'),
         'AUDIO'      => array(0, 0, 1,    '',    'Ansage freigegeben'),
         'PUSH'       => array(0, 0, 1,    '',    'Push freigegeben'),
         'PTEST'      => array(0, 0, 1,    '',    'Test-Push ausloesen'),
         // --- ab 1.1.0, hinten angehaengt ---
-        'TS'          => array(1, 0, 2000000000, 's', 'Zeitstempel des letzten Cron-Laufs (Unix-Sekunden). Alter = (Loxone-Zeit + 1230768000) - TS'),
-        'ZAEHLER'     => array(1, 0, 999,  '',   'Laufzaehler, laeuft 0...999 um - steht er still, laeuft der Cron nicht mehr'),
-        'FEHLERALTER' => array(1, -1, 100000, 'h', 'Stunden seit dem letzten vermerkten Fehler, -1 = keiner bekannt'),
+        'TS'          => array(1, 0, 2000000000, 's', 'Zeitstempel des letzten Cron-Laufs',
+                               'Unix-Sekunden. Alter = (Loxone-Zeit + 1230768000) - TS'),
+        'ZAEHLER'     => array(1, 0, 999,  '',   'Laufzaehler 0...999',
+                               'laeuft um; steht er still, laeuft der Cron nicht mehr'),
+        'FEHLERALTER' => array(1, -1, 100000, 'h', 'Stunden seit dem letzten Fehler',
+                               '-1 = keiner bekannt'),
     );
     if (!empty($cfg['stat_ein'])) {
         $f['EINSHEUTE'] = array(1, 0, 99,    '',    'Abgeschlossene Maeheinsaetze heute');
@@ -1456,7 +1773,7 @@ function mo_vorlage($dev = 1) {
         ? preg_replace('/[^A-Za-z0-9\.\-:]/', '', (string) $_SERVER['HTTP_HOST'])
         : (gethostname() ?: 'loxberry');
     $ordner = getenv('LBPPLUGINDIR') ?: 'robonect';
-    $dev = max(1, min(9, (int) $dev));
+    $dev = max(1, min(mo_max_maeher(), (int) $dev));   // die Zahl steht an EINER Stelle
     $cmds = array();
     foreach (mo_felder() as $name => $f) {
         list($analog, $min, $max, $einheit, $text) = $f;
@@ -1527,7 +1844,9 @@ function mo_config_speichern($cfg)
         return false;   /* ungueltiges UTF-8 - lieber gar nicht schreiben
                            als eine halbe Datei hinterlassen */
     }
-    @mkdir(dirname($p['config']), 0775, true);
+    /* A18: is_dir() davor - dieselbe Bauart wie in mo_config(). Ohne die
+     * Wache steht in jedem Prueflauf unter PHP 7.4 "mkdir(): File exists". */
+    if (!is_dir(dirname($p['config']))) { @mkdir(dirname($p['config']), 0775, true); }
     if (!mo_write_atomic($p['config'], $js, 0600)) { return false; }
 
     /* A6 (26.08.2026): zwei Dinge, die bis 1.0.13 an dieser Stelle fehlten
@@ -1619,13 +1938,30 @@ function mo_maeher_pruefen($m, $nr)
     foreach (array('name', 'ip', 'user', 'pass') as $k) {
         if (!mo_wert_taugt($m[$k])) { return array(null, sprintf(mo_t('TEXT.SICH_MAEHER_FORM'), $nr)); }
     }
+    /* Messerwechsel je Maeher: beide Felder sind FREIWILLIG. Ein leerer oder
+     * fehlender Wert heisst "die Vorgabe gilt" und wird nicht als 0
+     * geschrieben - sonst waere aus "erbt den Nullpunkt" stillschweigend
+     * "Nullpunkt 0" geworden, und die Warnung stuende dauerhaft an. */
+    $blade = array();
+    foreach (array('blade_hours' => array(1, 2000), 'blade_base' => array(0, 100000)) as $bk => $gr) {
+        if (!array_key_exists($bk, $m)) { continue; }
+        if (!mo_wert_taugt($m[$bk])) { return array(null, sprintf(mo_t('TEXT.SICH_MAEHER_FORM'), $nr)); }
+        $bv = trim((string) $m[$bk]);
+        if ($bv === '') { continue; }
+        if (preg_match('/^[0-9]{1,7}$/', $bv) !== 1
+            || (int) $bv < $gr[0] || (int) $bv > $gr[1]) {
+            return array(null, sprintf(mo_t('TEXT.SICH_MAEHER_BLADE'), $nr, $bk, $gr[0], $gr[1],
+                htmlspecialchars(mo_kuerzen($bv, 20), ENT_QUOTES, 'UTF-8')));
+        }
+        $blade[$bk] = (int) $bv;
+    }
     $ip = trim((string) $m['ip']);
     if ($ip === '') { return array(null, ''); }   // leere Zeile: still weglassen
     if (!preg_match('/^[\w\.\-]+$/', $ip)) {
         return array(null, sprintf(mo_t('TEXT.SICH_MAEHER_IP'), $nr, htmlspecialchars($ip, ENT_QUOTES, 'UTF-8')));
     }
     return array(array('name' => trim((string) $m['name']), 'ip' => $ip,
-                       'user' => trim((string) $m['user']), 'pass' => (string) $m['pass']), '');
+                       'user' => trim((string) $m['user']), 'pass' => (string) $m['pass']) + $blade, '');
 }
 
 /**
@@ -1658,14 +1994,21 @@ function mo_wert_pruefen($k, $v)
                 $out[$n] = (isset($v[$n]) && !empty($v[$n])) ? 1 : 0;
             }
             $fremd = array_diff(array_keys($v), array_keys($out));
-            if ($fremd) { return array(null, sprintf(mo_t('TEXT.SICH_FREMD'), $k . '.' . implode(', ' . $k . '.', $fremd))); }
+            /* A22: der Schluesselname kommt aus einer hochgeladenen Datei
+             * und geht roh in die Oberflaeche - die Beanstandungsliste wird
+             * bewusst unmaskiert ausgegeben, weil die Sprachtexte
+             * Auszeichnung tragen. Zwei andere Stellen derselben Datei
+             * maskieren laengst; diese hier nicht. */
+            if ($fremd) { return array(null, sprintf(mo_t('TEXT.SICH_FREMD'),
+                htmlspecialchars($k . '.' . implode(', ' . $k . '.', $fremd), ENT_QUOTES, 'UTF-8'))); }
             return array($out, '');
 
         case 'tts':
             if (!is_array($v)) { return array(null, sprintf(mo_t('TEXT.SICH_WERT'), $k)); }
             $soll = array('mode', 'ip', 'port', 'zones', 'volume', 'lang', 'template');
             $fremd = array_diff(array_keys($v), $soll);
-            if ($fremd) { return array(null, sprintf(mo_t('TEXT.SICH_FREMD'), 'tts.' . implode(', tts.', $fremd))); }
+            if ($fremd) { return array(null, sprintf(mo_t('TEXT.SICH_FREMD'),
+                htmlspecialchars('tts.' . implode(', tts.', $fremd), ENT_QUOTES, 'UTF-8'))); }
             foreach ($soll as $n) {
                 if (isset($v[$n]) && !mo_wert_taugt($v[$n])) {
                     return array(null, sprintf(mo_t('TEXT.SICH_WERT'), 'tts.' . $n));
@@ -1721,7 +2064,8 @@ function mo_wert_pruefen($k, $v)
         case 'mqtt_enabled':
         case 'stat_ein':     return mo_zahl_pruefen($k, $v, 0, 1);
     }
-    return array(null, sprintf(mo_t('TEXT.SICH_FREMD'), $k));
+    return array(null, sprintf(mo_t('TEXT.SICH_FREMD'),
+        htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8')));   // A22
 }
 
 /** Eine Zahl im Bereich - abgewiesen, nicht zurechtgebogen. */
@@ -1901,8 +2245,12 @@ function mo_endpunkt_probe($frisch = false)
     } elseif (strpos((string) $antwort, 'SELFTEST;OK=1') !== false) {
         $r = array('ok' => 1, 'text' => sprintf(mo_t('TEXT.PRUEF_EP_JA'), $code));
     } else {
+        /* A22: der Rumpf kommt vom Webserver und geht roh in die Prueflzeile.
+         * Der haeufige Fall ist harmlos und trotzdem stoerend: eine
+         * Apache-Fehlerseite beginnt mit <!DOCTYPE ...> und rendert als
+         * NICHTS - ein rotes Kreuz ohne Begruendung. */
         $r = array('ok' => 0, 'text' => sprintf(mo_t('TEXT.PRUEF_EP_NEIN'), $code,
-            mo_kuerzen(trim((string) $antwort), 80)));
+            htmlspecialchars(mo_kuerzen(trim((string) $antwort), 80), ENT_QUOTES, 'UTF-8')));
     }
     mo_write_json($cache, $r);
     return $r;
@@ -1978,7 +2326,14 @@ function mo_kuerzen($s, $n)
     if ($s === '') { return '-'; }
     if (strlen($s) <= $n) { return $s; }
     $teil = substr($s, 0, $n);
-    $ohne = preg_replace('/(?:[À-ÿ][-¿]*)$/', '', $teil);
+    /* A17: das Muster stand mit Literalzeichen da und wurde ohne /u
+     * BYTEWEISE gelesen. Aus dem ersten Teil wurde die Bytemenge
+     * 0x80-0xC3, aus dem zweiten 0x80-0xC2 - alle Fuehrungsbytes ab
+     * 0xC4 fielen heraus. Gemessen: eine auf halbem Gedankenstrich
+     * (E2 80) abgeschnittene Zeichenkette blieb ungueltiges UTF-8,
+     * also genau der Fall, gegen den die Funktion gebaut ist.
+     * Jetzt ausgeschrieben - Bytes, keine Literalzeichen. */
+    $ohne = preg_replace('/(?:[\xC0-\xFF][\x80-\xBF]*)$/', '', $teil);
     if (is_string($ohne)) { $teil = $ohne; }
     return $teil . '...';
 }
@@ -2082,9 +2437,9 @@ function mo_themen()
     /* Dieselben Schluessel, die mo_mqtt_publish() sendet - in derselben
      * Reihenfolge. Wer dort etwas ergaenzt, ergaenzt es hier. Die Pruefzeile
      * unten haelt beide gegeneinander. */
-    $je_maeher = array('ok', 'code', 'status', 'modus', 'batterie', 'maeht', 'laedt',
-        'fehler', 'stunden', 'dauer', 'messer_rest', 'messer_warn', 'temperatur',
-        'feuchte', 'wlan', 'timer');
+    /* A9: die Liste entsteht aus mo_thema_feld() - eine Stelle statt zwei.
+     * Bis 1.1.3 stand sie hier ein zweites Mal von Hand abgeschrieben. */
+    $je_maeher = array_keys(mo_thema_feld());
     $je_maeher = array_merge($je_maeher, array_keys(mo_meldeflags(1)));
     $je_maeher = array_merge($je_maeher, array_keys(mo_zusatzwerte(1)));
     return array('maeher' => $je_maeher,
@@ -2169,11 +2524,27 @@ function mo_selbsttest($datei, array $reiter)
                      $gw['fassung'] > 0 ? (string) $gw['fassung'] : mo_t('TEXT.PRUEF_GW_UNBEKANNT')));
     }
 
-    // --- Themenliste gegen den Sendecode
+    /* --- Themenliste gegen die Feldliste
+     *
+     * Bis 1.1.3 stand hier eine feste 1: die Zeile zaehlte drei Zahlen und
+     * verglich nichts, war also unter allen Umstaenden gruen. Jetzt wird
+     * jedes Thema gegen mo_felder() aufgeloest; ein Thema ohne Feld ist ein
+     * Befund und wird beim Namen genannt. Ein leerer Eintrag in
+     * mo_thema_feld() heisst ausdruecklich "kein Zahlenfeld" und zaehlt
+     * nicht als Luecke. */
     $th = mo_themen();
-    $felder = count(mo_felder());
-    $add('PRUEF.THEMEN', 1, sprintf(mo_t('TEXT.PRUEF_THEMEN'),
-         count($th['maeher']), count($th['anlage']), $felder));
+    $felder = mo_felder();
+    $karte = mo_thema_feld();
+    $ohne = array();
+    foreach ($th['maeher'] as $mo_t_th) {
+        $mo_t_f = isset($karte[$mo_t_th]) ? $karte[$mo_t_th] : strtoupper($mo_t_th);
+        if ($mo_t_f === '') { continue; }
+        if (!isset($felder[$mo_t_f])) { $ohne[] = $mo_t_th; }
+    }
+    $add('PRUEF.THEMEN', $ohne ? 0 : 1, $ohne
+        ? sprintf(mo_t('TEXT.PRUEF_THEMEN_NEIN'), implode(', ', $ohne))
+        : sprintf(mo_t('TEXT.PRUEF_THEMEN'),
+                  count($th['maeher']), count($th['anlage']), count($felder)));
 
     // --- Die eigene Datei
     list($ok, $txt) = mo_reiterprobe($reiter, $datei);   $add('PRUEF.REITER', $ok, $txt);

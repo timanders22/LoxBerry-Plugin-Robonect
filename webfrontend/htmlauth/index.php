@@ -83,14 +83,12 @@ if ($mw_lbhome) {
 
 $mw_p       = mo_paths();
 $mw_cfgfile = $mw_p['config'];
-$mw_cfgdir  = dirname($mw_cfgfile);
-$mw_bkfile  = $mw_p['backup'];
 $mw_logfile = $mw_p['log'];
 
 
 /* ================= 2. Konfiguration, Vorgaben, Token ================= */
 
-$mw_saved = false; $mw_err = ''; $mw_note = '';
+$mw_saved = false; $mw_note = '';
 $mw_fehler = array();     // gesammelte Beanstandungen - nie ueberschreiben
 
 /* mo_config() heilt selbst: fehlende, leere und beschaedigte Dateien holt es
@@ -255,7 +253,7 @@ if ($mw_ist_post && isset($_POST['mo_zurueck'])) {
 }
 
 if ($mw_ist_post && isset($_POST['clearlog'])) {
-    @mkdir(dirname($mw_logfile), 0775, true);
+    if (!is_dir(dirname($mw_logfile))) { @mkdir(dirname($mw_logfile), 0775, true); }   // A18
     @file_put_contents($mw_logfile, '[' . date('Y-m-d H:i:s') . "] Protokoll geleert (Admin-Oberflaeche)\n");
     $mw_tab = 'tab-log';
 }
@@ -319,20 +317,43 @@ if ($mw_ist_post && isset($_POST['save'])) {
     $mw_usr  = isset($_POST['m_user']) && is_array($_POST['m_user']) ? $_POST['m_user'] : array();
     $mw_pwd  = isset($_POST['m_pass']) && is_array($_POST['m_pass']) ? $_POST['m_pass'] : array();
     $mw_del  = isset($_POST['m_del'])  && is_array($_POST['m_del'])  ? $_POST['m_del']  : array();
+    /* Messerwechsel je Maeher (1.1.4). Ein LEERES Feld heisst "die Vorgabe
+     * gilt" und wird nicht als 0 uebernommen - sonst waere aus "erbt den
+     * Nullpunkt" stillschweigend "Nullpunkt 0" geworden. */
+    $mw_bhs  = isset($_POST['m_bhours']) && is_array($_POST['m_bhours']) ? $_POST['m_bhours'] : array();
+    $mw_bbs  = isset($_POST['m_bbase'])  && is_array($_POST['m_bbase'])  ? $_POST['m_bbase']  : array();
     $mw_alt  = is_array($mw_cfg['mowers']) ? array_values($mw_cfg['mowers']) : array();
     $mw_liste = array();
     for ($mw_i = 0; $mw_i < mo_max_maeher(); $mw_i++) {
         if (!empty($mw_del[$mw_i])) { continue; }
         $mw_ip = trim((string) (isset($mw_ips[$mw_i]) ? $mw_ips[$mw_i] : ''));
-        if ($mw_ip === '') { continue; }
+        if ($mw_ip === '') {
+            /* A19 (04.09.2026): der Hilfetext unter der Tabelle sagt
+             * woertlich "Geloescht wird ueber den Haken, nie durch Leeren
+             * eines Feldes". Fuer den Namen stimmte das, fuer die ADRESSE
+             * nicht: ein versehentlich geleertes Adressfeld warf die Zeile
+             * samt Benutzer und Kennwort weg, und die Seite meldete
+             * "Konfiguration gespeichert". Eine Zeile, die es vorher gab,
+             * wird jetzt beanstandet; eine leer gebliebene Zeile bleibt
+             * stillschweigend weg - die gab es ja nie. */
+            if (isset($mw_alt[$mw_i]) && is_array($mw_alt[$mw_i])) {
+                $mw_fehler[] = sprintf(mo_t('TEXT.MAEHER_ADRESSE_LEER'), $mw_i + 1);
+            }
+            continue;
+        }
         $mw_pw = (string) (isset($mw_pwd[$mw_i]) ? $mw_pwd[$mw_i] : '');
         // Leeres Passwortfeld = bisheriges Passwort behalten (es wird nie angezeigt)
         if ($mw_pw === '' && isset($mw_alt[$mw_i]['pass'])) { $mw_pw = (string) $mw_alt[$mw_i]['pass']; }
-        $mw_liste[] = array(
+        $mw_zeile = array(
             'name' => (string) (isset($mw_nam[$mw_i]) ? $mw_nam[$mw_i] : ''),
             'ip'   => $mw_ip,
             'user' => (string) (isset($mw_usr[$mw_i]) ? $mw_usr[$mw_i] : ''),
             'pass' => $mw_pw);
+        $mw_bh = trim((string) (isset($mw_bhs[$mw_i]) ? $mw_bhs[$mw_i] : ''));
+        $mw_bb = trim((string) (isset($mw_bbs[$mw_i]) ? $mw_bbs[$mw_i] : ''));
+        if ($mw_bh !== '') { $mw_zeile['blade_hours'] = $mw_bh; }
+        if ($mw_bb !== '') { $mw_zeile['blade_base'] = $mw_bb; }
+        $mw_liste[] = $mw_zeile;
     }
     /* Alle Beanstandungen sammeln, nicht die erste melden - der Benutzer
      * korrigiert sonst einen Fehler nach dem anderen. */
@@ -502,7 +523,6 @@ $mw_host = mw_e(isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : '<loxberr
 
 <?php if ($mw_saved) { ?><div class="sm-alert sm-ok"><b><?php echo mw_e(mo_t('TEXT.KONFIGURATION_GESPEICHERT')); ?></b> <?php echo mw_e(mo_t('TEXT.ZUGANGSDATEN_MIT_DATEIRECHTEN_0600')); ?></div><?php } ?>
 <?php if ($mw_note !== '') { ?><div class="sm-alert sm-ok"><?php echo $mw_note; ?></div><?php } ?>
-<?php if ($mw_err !== '') { ?><div class="sm-alert sm-err"><b><?php echo mw_e(mo_t('TEXT.FEHLER_4')); ?></b> <?php echo $mw_err; ?></div><?php } ?>
 <?php if ($mw_fehler) { ?>
 <div class="sm-alert sm-err"><b><?php echo mw_e(mo_t('TEXT.FEHLER_4')); ?></b>
 <ul style="margin:6px 0 0 18px;padding:0;">
@@ -562,7 +582,7 @@ $mw_host = mw_e(isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : '<loxberr
 <h2><?php echo sprintf(mw_e(mo_t('TEXT.H_MAEHER')), mo_max_maeher()); ?></h2>
 <div class="sm-breit">
 <table class="sm-tbl">
-<tr><th style="width:36px;">Nr.</th><th style="width:24%;"><?php echo mw_e(mo_t('TEXT.NAME_FREI')); ?></th><th><?php echo mw_e(mo_t('TEXT.ADRESSE')); ?></th><th style="width:18%;"><?php echo mw_e(mo_t('TEXT.BENUTZER')); ?></th><th style="width:20%;"><?php echo mw_e(mo_t('TEXT.PASSWORT')); ?></th><th style="width:70px;"><?php echo mw_e(mo_t('TEXT.LOESCHEN')); ?></th></tr>
+<tr><th style="width:36px;">Nr.</th><th style="width:24%;"><?php echo mw_e(mo_t('TEXT.NAME_FREI')); ?></th><th><?php echo mw_e(mo_t('TEXT.ADRESSE')); ?></th><th style="width:18%;"><?php echo mw_e(mo_t('TEXT.BENUTZER')); ?></th><th style="width:20%;"><?php echo mw_e(mo_t('TEXT.PASSWORT')); ?></th><th style="width:110px;"><?php echo mw_e(mo_t('TEXT.MESSER_IV_KURZ')); ?></th><th style="width:110px;"><?php echo mw_e(mo_t('TEXT.MESSER_NP_KURZ')); ?></th><th style="width:70px;"><?php echo mw_e(mo_t('TEXT.LOESCHEN')); ?></th></tr>
 <?php
 /* Vorhandene Zeilen plus EINE leere zum Anlegen - hoechstens mo_max_maeher().
    Der Index steht ausgeschrieben, siehe die Begruendung am Speicher-Handler. */
@@ -570,7 +590,8 @@ $mw_zeilen = is_array($mw_cfg['mowers']) ? array_values($mw_cfg['mowers']) : arr
 $mw_anz = min(mo_max_maeher(), count($mw_zeilen) + 1);
 for ($mw_i = 0; $mw_i < $mw_anz; $mw_i++) {
     $mw_r = isset($mw_zeilen[$mw_i]) ? (array) $mw_zeilen[$mw_i] : array();
-    $mw_r += array('name' => '', 'ip' => '', 'user' => '', 'pass' => '');
+    $mw_r += array('name' => '', 'ip' => '', 'user' => '', 'pass' => '',
+                   'blade_hours' => '', 'blade_base' => '');
     $mw_leer = ($mw_r['ip'] === '');
 ?>
 <tr>
@@ -579,12 +600,15 @@ for ($mw_i = 0; $mw_i < $mw_anz; $mw_i++) {
 <td><input data-role="none" type="text" name="m_ip[<?php echo (int) $mw_i; ?>]" value="<?php echo mw_e($mw_r['ip']); ?>" placeholder="<?php echo $mw_leer ? mw_e(mo_t('TEXT.PH_IP')) : ''; ?>"></td>
 <td><input data-role="none" type="text" name="m_user[<?php echo (int) $mw_i; ?>]" value="<?php echo mw_e($mw_r['user']); ?>" placeholder="admin"></td>
 <td><input data-role="none" type="password" name="m_pass[<?php echo (int) $mw_i; ?>]" value="" placeholder="<?php echo $mw_r['pass'] !== '' ? mw_e(mo_t('TEXT.PH_GESPEICHERT')) : ''; ?>" autocomplete="new-password"></td>
+<td><input data-role="none" type="number" name="m_bhours[<?php echo (int) $mw_i; ?>]" value="<?php echo mw_e((string) $mw_r['blade_hours']); ?>" min="1" max="2000" placeholder="<?php echo (int) $mw_cfg['blade_hours']; ?>"></td>
+<td><input data-role="none" type="number" name="m_bbase[<?php echo (int) $mw_i; ?>]" value="<?php echo mw_e((string) $mw_r['blade_base']); ?>" min="0" max="100000" placeholder="<?php echo (int) $mw_cfg['blade_base']; ?>"></td>
 <td style="text-align:center;"><?php if (!$mw_leer) { ?><input data-role="none" type="checkbox" name="m_del[<?php echo (int) $mw_i; ?>]" value="1" title="<?php echo mw_e(mo_t('TEXT.LOESCHEN_HILFE')); ?>"><?php } ?></td>
 </tr>
 <?php } ?>
 </table>
 </div>
 <div class="sm-hilfe"><?php echo mo_t('TEXT.LOESCHEN_HILFE'); ?></div>
+<div class="sm-hilfe"><?php echo mo_t('TEXT.MESSER_JE_MAEHER'); ?></div>
 <div class="sm-hinweis"><?php echo mo_t('TEXT.PASSWORT_HINWEIS'); ?></div>
 
 <div class="sm-row">
@@ -596,12 +620,14 @@ for ($mw_i = 0; $mw_i < $mw_anz; $mw_i++) {
     <div>
         <label><?php echo mw_e(mo_t('TEXT.MESSERWECHSEL_INTERVALL_BETRIEBSST')); ?></label>
         <input data-role="none" type="number" name="blade_hours" value="<?php echo (int) $mw_cfg['blade_hours']; ?>" min="1" max="2000">
-        <div class="sm-small"><?php echo mw_e(mo_t('TEXT.HERSTELLERANGABE_OFT_150250_H')); ?></div>
+        <div class="sm-small"><?php echo mw_e(mo_t('TEXT.HERSTELLERANGABE_OFT_150250_H')); ?>
+             &mdash; <?php echo mw_e(mo_t('TEXT.MESSER_VORGABE')); ?></div>
     </div>
     <div>
         <label><?php echo mw_e(mo_t('TEXT.NULLPUNKT_STUNDEN_BEIM_LETZTEN_WEC')); ?></label>
         <input data-role="none" type="number" name="blade_base" value="<?php echo (int) $mw_cfg['blade_base']; ?>" min="0" max="100000">
-        <div class="sm-small"><?php echo mo_t('TEXT.WIRD_BEIM_QUITTIEREN_AUTOMATISCH_G'); ?> <span class="sm-mono">?cmd=blade_reset</span>).</div>
+        <div class="sm-small"><?php echo mo_t('TEXT.WIRD_BEIM_QUITTIEREN_AUTOMATISCH_G'); ?> <span class="sm-mono">?cmd=blade_reset</span>).
+             &mdash; <?php echo mw_e(mo_t('TEXT.MESSER_VORGABE')); ?></div>
     </div>
 </div>
 
@@ -700,7 +726,18 @@ for ($mw_i = 0; $mw_i < $mw_anz; $mw_i++) {
 <div class="sm-knopfreihe">
 <form action="index.php" method="post">
     <?php echo mo_fmt_feld(); ?>
+    <?php $mw_mlist = mo_mowers(); if (count($mw_mlist) > 1) { ?>
+    <label style="display:inline-flex;align-items:center;gap:6px;margin-right:10px;">
+        <?php echo mw_e(mo_t('TEXT.QUITTIEREN_FUER')); ?>
+        <select data-role="none" name="bladereset">
+        <?php foreach ($mw_mlist as $mw_mn => $mw_mm) { ?>
+            <option value="<?php echo (int) $mw_mn; ?>"><?php echo mw_e($mw_mm['name']); ?></option>
+        <?php } ?>
+        </select>
+    </label>
+    <?php } else { ?>
     <input data-role="none" type="hidden" name="bladereset" value="1">
+    <?php } ?>
     <input data-role="none" type="hidden" name="activetab" value="tab-settings">
     <button data-role="none" class="sm-btn sm-b-aktion" type="submit"><?php echo mw_e(mo_t('TEXT.MESSERWECHSEL_QUITTIEREN')); ?></button>
 </form>
@@ -783,8 +820,22 @@ $mw_praefix = mo_mqtt_praefix($mw_cfg['mqtt_topic']);
 /* Die Tabelle entsteht aus DERSELBEN Quelle wie der Sendecode - die
  * Pruefzeile im Reiter Test haelt beide gegeneinander. */
 foreach ($mw_themen['maeher'] as $mw_th) {
-    $mw_gross = strtoupper($mw_th);
-    $mw_bed = isset($mw_felder[$mw_gross]) ? $mw_felder[$mw_gross][4] : ($mw_th === 'status' ? mo_t('TEXT.TH_STATUS') : '');
+    /* A9 (04.09.2026, gemessen): hier stand strtoupper($mw_th). Das trifft
+     * bei vier Themen daneben - 'batterie' ergibt BATTERIE, das Feld heisst
+     * BATT; ebenso messer_rest, messer_warn, temperatur. Vier von 55 Zeilen
+     * standen ohne Bedeutung da, und zwar stumm: die Zeile erschien, nur die
+     * Spalte war leer. Die Zuordnung steht jetzt ausgeschrieben in
+     * mo_thema_feld(), und ein unbekanntes Thema wird SICHTBAR gemeldet
+     * statt zu einer leeren Zelle zu werden. */
+    $mw_karte = mo_thema_feld();
+    $mw_gross = isset($mw_karte[$mw_th]) ? $mw_karte[$mw_th] : strtoupper($mw_th);
+    if ($mw_th === 'status') {
+        $mw_bed = mo_t('TEXT.TH_STATUS');
+    } elseif ($mw_gross !== '' && isset($mw_felder[$mw_gross])) {
+        $mw_bed = mo_feld_text($mw_gross);
+    } else {
+        $mw_bed = sprintf(mo_t('TEXT.TH_OHNE'), $mw_th);
+    }
 ?>
 <tr><td><span class="sm-mono"><?php echo mw_e($mw_praefix); ?>/<?php echo mw_e($mw_th); ?></span></td><td><?php echo mw_e($mw_bed); ?></td></tr>
 <?php } ?>
@@ -829,7 +880,7 @@ foreach ($mw_themen['maeher'] as $mw_th) {
  * Sprachdateien ausgeschrieben: dieselbe Angabe aus zwei Quellen, und wer die
  * Tabelle abtippte statt die Vorlage zu importieren, bekam die aeltere. */
 foreach ($mw_felder as $mw_name => $mw_f) { ?>
-<tr><td><span class="sm-mono"><?php echo mw_e(mo_check($mw_name)); ?></span></td><td><?php echo mw_e($mw_f[4]); ?></td></tr>
+<tr><td><span class="sm-mono"><?php echo mw_e(mo_check($mw_name)); ?></span></td><td><?php echo mw_e(mo_feld_text($mw_name)); ?></td></tr>
 <?php } ?>
 </table>
 </div>
@@ -1070,7 +1121,12 @@ function mwTtsMode() {
     if (h) { h.style.display = (m === 'audioserver') ? 'block' : 'none'; }
     if (t) { t.style.display = (m === 'ms4h' || m === 'custom') ? 'block' : 'none'; }
     var port = document.getElementsByName('tts_port')[0];
-    if (port && m === 'musicserver' && (!port.value || port.value === '80')) { port.value = 7091; }
+    /* A23 (05.09.2026): bis 1.1.3 stand hier zusaetzlich port.value === '80'.
+       Die Funktion laeuft beim Seitenaufbau; ein bewusst gespeicherter Port 80
+       wurde damit ohne Zutun auf 7091 gestellt, und ein anschliessendes,
+       sonst unveraendertes Speichern schrieb ihn in die Datei - gemeldet als
+       "Konfiguration gespeichert". Vorbelegt wird nur noch ein LEERES Feld. */
+    if (port && m === 'musicserver' && !port.value) { port.value = 7091; }
 }
 (function () {
     var tabs = document.querySelectorAll('.sm-tab');

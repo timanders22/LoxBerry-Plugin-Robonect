@@ -1,4 +1,16 @@
 #!/bin/sh
 # Rasenmaeher (Robonect) - minutlicher Cron (Status, Meldungen, MQTT)
 # REPLACELBPHTMLDIR wird bei der Installation durch den Plugin-HTML-Pfad ersetzt.
-php "REPLACELBPHTMLDIR/cron.php" >/dev/null 2>&1
+# A14 (04.09.2026): Rueckgabewert und Fehlerausgabe nicht wegwerfen.
+# Bis 1.1.3 stand hier ">/dev/null 2>&1". Damit erreichte weder
+# "FEHLER;GRUND=SPERRE" (Rueckgabewert 1) noch ein PHP-Abbruch nach einem
+# halben Upgrade jemanden; der einzige Hinweis war das ausbleibende
+# Lebenszeichen. Die normale Ausgabe bleibt unterdrueckt, der Fehlerfall
+# geht in das Protokoll des Plugins - dort, wo der Anwender ohnehin nachsieht.
+ERR=$(php "REPLACELBPHTMLDIR/cron.php" 2>&1 >/dev/null)
+RC=$?
+if [ "$RC" -ne 0 ]; then
+    printf '%s CRON rc=%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$RC" "$ERR" \
+        >> "REPLACELBPLOGDIR/mower.log" 2>/dev/null
+fi
+exit 0

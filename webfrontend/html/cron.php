@@ -14,6 +14,32 @@
 require_once __DIR__ . '/mower_lib.php';
 
 /* ==================================================================
+ * A1 (04.09.2026): DIESER LAUF GEHOERT NICHT INS NETZ
+ * ==================================================================
+ *
+ * Die Datei liegt unter webfrontend/html/ und wird damit unter
+ * /plugins/<ordner>/cron.php OHNE Anmeldung ausgeliefert. Gemessen am
+ * Pruefstand: ein Aufruf von aussen antwortete HTTP 200 mit
+ * "OK;GEMESSEN=1;MAEHER=1;ZAEHLER=1", schrieb lauf.json und trieb den
+ * Laufzaehler ueber fuenf weitere Aufrufe von 1 auf 6.
+ *
+ * Das ist genau die Auskunft, die der Miniserver braucht, um einen
+ * STEHENDEN Cron zu erkennen (siehe mower.php, Abschnitt "Warum TS und
+ * ZAEHLER dazugehoeren"). Von aussen vorwaerts getrieben ist sie wertlos:
+ * ein toter Cron sieht dann aus wie ein lebender. Derselbe Aufruf loeste
+ * ausserdem den MQTT-Versand und - bei gesetztem Haken - eine Ansage aus.
+ *
+ * Der Riegel steht VOR jeder Wirkung. Der Cron ruft "php .../cron.php"
+ * und laeuft damit unter der Kommandozeile; er bleibt unberuehrt.
+ */
+if (PHP_SAPI !== 'cli') {
+    http_response_code(403);
+    header('Content-Type: text/plain; charset=utf-8');
+    echo "CRON;OK=0;ERR=NUR_CLI\n";
+    exit(1);
+}
+
+/* ==================================================================
  * EINE SPERRE, WEIL DIESER LAUF INS NETZ GEHT
  * ==================================================================
  *
@@ -30,11 +56,6 @@ require_once __DIR__ . '/mower_lib.php';
  * Der Wert liegt deutlich ueber dem laengsten denkbaren Durchgang.
  */
 $mo_sperre = mo_tmpdir() . '/cron.lock';
-if (is_file($mo_sperre) && time() - filemtime($mo_sperre) < 900) {
-    $mo_wer = trim((string) @file_get_contents($mo_sperre));
-    echo 'SKIP;GRUND=LAEUFT_NOCH;SEIT=' . (time() - filemtime($mo_sperre)) . 's;PID=' . $mo_wer . "\n";
-    exit(0);   // Ein uebersprungener Lauf ist KEIN Fehler.
-}
 $mo_fh = @fopen($mo_sperre, 'c');
 if ($mo_fh === false) {
     mo_log('Der Cron-Lauf konnte seine Sperrdatei nicht anlegen: ' . $mo_sperre);
@@ -42,12 +63,41 @@ if ($mo_fh === false) {
     exit(1);
 }
 @chmod($mo_sperre, 0644);
+
+/* A13 (04.09.2026): flock statt Vorpruefung.
+ *
+ * Bis 1.1.3 stand hier "is_file() und filemtime() < 900, sonst schreiben".
+ * Zwischen der Pruefung und dem Schreiben lag ein Fenster, in dem ein
+ * zweiter Lauf dieselbe Pruefung bestand - beide liefen dann parallel und
+ * schrieben dieselben Dateien. Die Abschlussfunktion loeschte die Sperre
+ * ausserdem nach PFAD: der zweite Lauf raeumte beim Beenden die Sperre des
+ * ersten weg, der noch lief.
+ *
+ * flock() entscheidet ohne dieses Fenster. Die Altersgrenze von 900 s
+ * entfaellt damit ersatzlos, und zwar zum Besseren: eine verwaiste Sperre
+ * kann es nicht mehr geben. Stirbt der Prozess, gibt das Betriebssystem
+ * die Sperre sofort frei - kein Warten auf eine Frist, egal ob der Rechner
+ * abgestuerzt ist oder jemand den Lauf abgebrochen hat.
+ *
+ * Die Datei bleibt liegen: sie unter einer gehaltenen Sperre zu loeschen,
+ * ist die naechste Wettlaufstelle. Sie steht auf der Ramdisk und ist nach
+ * einem Neustart ohnehin fort.
+ */
+if (!flock($mo_fh, LOCK_EX | LOCK_NB)) {
+    $mo_wer = trim((string) @file_get_contents($mo_sperre));
+    $mo_seit = time() - (int) @filemtime($mo_sperre);
+    fclose($mo_fh);
+    echo 'SKIP;GRUND=LAEUFT_NOCH;SEIT=' . $mo_seit . 's;PID=' . $mo_wer . "\n";
+    exit(0);   // Ein uebersprungener Lauf ist KEIN Fehler.
+}
 ftruncate($mo_fh, 0);
 fwrite($mo_fh, (string) getmypid());
-fclose($mo_fh);
-/* Auch bei einem Abbruch mitten im Lauf wieder freigeben - sonst steht die
- * Sperre bis zur Altersgrenze. */
-register_shutdown_function(function () use ($mo_sperre) { @unlink($mo_sperre); });
+fflush($mo_fh);
+/* Das Handle bleibt bis zum Ende des Laufs offen - es IST die Sperre.
+ * Freigegeben wird das eigene Handle, nicht ein Pfad. */
+register_shutdown_function(function () use ($mo_fh) {
+    if (is_resource($mo_fh)) { @flock($mo_fh, LOCK_UN); @fclose($mo_fh); }
+});
 
 /* Vervollstaendigen: fehlt ein Schluessel, wird er EINMAL geschrieben. Der
  * Dienst muss das koennen, weil er auf einer Anlage laufen kann, deren

@@ -28,7 +28,11 @@ if [ -z "$BASE" ] || [ ! -d "$BASE" ]; then
 fi
 
 BK="$BASE/config/plugins/$PDIR.backup.json"
-TMP="/tmp/robonect"
+# A12: derselbe Ordnername wie in mo_paths(). Bis 1.1.3 stand hier - wie
+# dort - fest "robonect"; bei einer Zweitinstallation haengt LoxBerry '01'
+# an den Ordnernamen, und dann raeumte die Deinstallation den Arbeitsordner
+# der ERSTEN Installation ab.
+TMP="/tmp/$PDIR"
 
 if [ -f "$BK" ]; then
     rm -f "$BK" && echo "<OK> Sicherung der Konfiguration entfernt: $PDIR.backup.json"
