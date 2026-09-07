@@ -42,15 +42,38 @@
  *   Ohne passendes Token aus dem Reiter "Einbindung in Loxone" antwortet
  *   ?cmd= mit HTTP 403.
  *
- * Weitere Aufrufe: ?debug=1  ?json=1  ?refresh=1
+ * Weitere Aufrufe: ?json=1  ?debug=1&token=T  ?refresh=1&token=T
  *   ?ptest=1&token=T   Test-Pushnachricht anstossen (tokenpflichtig)
  *   ?roh=<Befehl>&token=T   die ROHE Antwort des Moduls auf einen Lesebefehl
+ *
+ * UMSTIEGSFOLGE 1.1.6:
+ *   ?refresh=1 ist tokenpflichtig geworden (A10). Es uebergeht den
+ *     Zwischenspeicher und kostete damit je Aufruf einen echten Geraeteabruf
+ *     - gemessen: 10 Aufrufe ohne refresh = 0 Abrufe, 10 mit = 20.
+ *   ?json=1 bleibt offen, laesst ohne Token aber die KLARTEXTFELDER weg
+ *     (name, text, grundtext, fehlertext). Sie trugen die Adresse des
+ *     Maehers - genau das, wofuer ?debug=1 ein Token verlangt (A2).
  *
  * Zugangsdaten stehen ausschliesslich in der Plugin-Konfiguration - diese URL
  * enthaelt KEIN Passwort und darf daher bedenkenlos in der Loxone-Projektdatei stehen.
  */
 
 require_once __DIR__ . '/mower_lib.php';
+
+/* A1 (06.09.2026, gemessen): DER RIEGEL, UND ZWAR VOR ALLEM ANDEREN.
+ *
+ * Bis 1.1.5 war nur die Tokenpruefung lesend (mo_cfg_ro()). Der offene
+ * Statuszweig ging ueber mo_state() -> mo_config() mit $erzeugen = true und
+ * legte mower.json an - 686 Byte, mit Kennwort und Aktionstoken, aus der
+ * Zweitschrift geheilt. Gemessen an einem nachgebauten LoxBerry, fuer
+ * "?" (der Loxone-Abruf), ?refresh=1, ?json=1, ?debug=1 und ?dev=N; die
+ * Tokenzweige legten nichts an.
+ *
+ * Ein Schalter je Aufrufstelle waere die naechste Wette: geschrieben wird
+ * aus mo_state(), mo_mowers() und mo_log() heraus. Der Riegel gilt deshalb
+ * fuer den ganzen Prozess. cron.php und die Oberflaeche legen ihn NICHT um -
+ * die duerfen und sollen schreiben. */
+mo_nur_lesen(true);
 
 /** A6: der unangemeldete Endpunkt LIEST nur - er legt nichts an.
  *
@@ -79,6 +102,23 @@ if (isset($_GET['dev'])) {
         exit;
     }
     $dev = (int) $mo_dev_roh;
+}
+
+/* A10 (06.09.2026, gemessen): ?refresh=1 uebergeht den Zwischenspeicher.
+ * Gemessen an einer Attrappe des Moduls: zehn Aufrufe ohne refresh kosteten
+ * 0 Geraeteabrufe, zehn mit refresh kosteten 20. Damit liess sich die
+ * Bremse, die Maeher und Apache-Arbeiter schuetzt, ohne Token von jedem
+ * Geraet im Netz abschalten - und bei stummem Maeher kostet der erste
+ * Aufruf jeder Minute bis zu fuenf Sekunden Arbeiterzeit.
+ *
+ * Abgewiesen und GEMELDET, nicht stillschweigend ignoriert: sonst suchte
+ * jemand den Grund, warum sein frischer Wert nicht frisch ist. Die
+ * Statuszeile bleibt offen, nur das Uebergehen des Zwischenspeichers nicht.
+ *
+ * Die Pruefung steht hinter den Funktionsdefinitionen, weil sie mo_token_ok()
+ * braucht; ausgefuehrt wird sie vor jedem Zweig, der mo_state() ruft. */
+function mo_refresh_erlaubt() {
+    return isset($_GET['refresh']) && mo_token_ok();
 }
 
 /** Ist ein gueltiges Aktionstoken mitgeschickt worden?
@@ -113,6 +153,14 @@ function mo_token_eingerichtet() {
  *
  * Abgewiesen statt still entschieden - welche der beiden Absichten gemeint
  * war, weiss nur der Aufrufer. */
+if (isset($_GET['refresh']) && !mo_token_ok()) {
+    http_response_code(403);
+    header('Content-Type: text/plain; charset=utf-8');
+    echo 'MOWER;OK=0;ERR=' . (mo_token_eingerichtet() ? 'TOKEN' : 'KEIN_TOKEN_EINGERICHTET')
+       . ";HINWEIS=refresh ist seit 1.1.6 tokenpflichtig\n";
+    exit;
+}
+
 $mo_mehrdeutig = array();
 foreach (array('cmd', 'ptest', 'roh', 'selftest') as $mo_p) {
     if (isset($_GET['json']) && isset($_GET[$mo_p])) { $mo_mehrdeutig[] = $mo_p; }
@@ -126,10 +174,28 @@ if ($mo_mehrdeutig) {
 
 if (isset($_GET['json'])) {
     header('Content-Type: application/json; charset=utf-8');
-    $st = mo_state($dev, isset($_GET['refresh']));
+    $st = mo_state($dev, mo_refresh_erlaubt());
     $st['ann'] = mo_ann_active($dev);
     $st['ptest'] = mo_ptest_active();
     $st['werte'] = mo_werte($dev, $st);
+    /* A2 (06.09.2026, gemessen): ?debug=1 ist tokenpflichtig, weil es "Name
+     * und ADRESSE des Maehers, WLAN-Pegel, Fehlertext" nennt - so steht es
+     * im Kommentar weiter unten. ?json=1 lieferte drei davon offen aus, und
+     * die Adresse steckte im Klartext in text/grundtext, sobald curl sie in
+     * seine Meldung setzt: "Failed to connect to 127.0.0.1 port 9:
+     * Connection refused". Zwei Wahrheiten ueber dieselbe Frage.
+     *
+     * ?json=1 bleibt offen - der Reiter "Einbindung in Loxone" empfiehlt es
+     * in Schritt 7 als Gegenprobe, und dafuer braucht es den Block werte.
+     * Ohne Token fallen nur die Klartextfelder weg; grund bleibt (er traegt
+     * ein Merkwort wie keine_antwort, keine Adresse). */
+    if (!mo_token_ok()) {
+        $st['name'] = '';
+        $st['text'] = mo_status_text($st['code']);
+        $st['grundtext'] = '';
+        $st['fehlertext'] = '';
+        $st['gekuerzt'] = 1;
+    }
     echo json_encode($st, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT);
     exit;
 }
@@ -244,17 +310,26 @@ if (isset($_GET['cmd'])) {
         echo 'CMD;OK=' . $ok . ";BEFEHL=blade_reset\n";
         exit;
     }
-    list($ok, $info) = mo_command($cmd, $dev, isset($_GET['p']) && is_string($_GET['p']) ? $_GET['p'] : '', $probe);
+    list($ok, $info, $art) = mo_command($cmd, $dev, isset($_GET['p']) && is_string($_GET['p']) ? $_GET['p'] : '', $probe);
     /* A16: bis 1.1.3 ging in diesem Zweig alles mit HTTP 200 hinaus - der
      * unbekannte Befehl, der nicht eingerichtete Maeher und der
      * fehlgeschlagene Geraetekontakt. Der ?roh=-Zweig nebenan setzte laengst
      * 400. Jetzt einheitlich: 400 = die Anfrage taugt nicht, 409 = die
      * Anlage ist nicht eingerichtet, 502 = das Geraet hat nicht geliefert.
-     * OK=2 ist der Trockenlauf und bleibt 200. */
+     * OK=2 ist der Trockenlauf und bleibt 200.
+     *
+     * A8 (06.09.2026, gemessen): bis 1.1.5 wurde die Art aus dem
+     * MELDUNGSTEXT geraten - gesucht wurde kleingeschriebenes 'unbekannt',
+     * die Meldung heisst "Unbekannter Auftragsparameter". Gemessen ueber
+     * echtes HTTP: ?cmd=job&p=foo=1 antwortete mit 502, also als
+     * Geraeteausfall, obwohl das Geraet nie angesprochen wurde. Ein Text,
+     * der eine Verzweigung traegt, ist dieselbe Falle wie ein Kommentar,
+     * der die gesuchte Zeichenfolge enthaelt. mo_command() nennt die Art
+     * jetzt selbst. */
     if ($ok === 0) {
-        if (strpos($info, 'unbekannt') !== false || strpos($info, 'Unzulaessig') !== false) {
+        if ($art === 'anfrage') {
             http_response_code(400);
-        } elseif (strpos($info, 'nicht konfiguriert') !== false) {
+        } elseif ($art === 'anlage') {
             http_response_code(409);
         } else {
             http_response_code(502);
@@ -295,7 +370,7 @@ if (isset($_GET['ptest'])) {
     exit;
 }
 
-$st = mo_state($dev, isset($_GET['refresh']));
+$st = mo_state($dev, mo_refresh_erlaubt());
 $cfg = mo_cfg_ro();
 
 /* ?debug=1 nennt Name und ADRESSE des Maehers, WLAN-Pegel, Fehlertext und

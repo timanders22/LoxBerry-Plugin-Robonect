@@ -7,8 +7,11 @@
  * 2. Status aller Maeher aktualisieren (Cache-schonend).
  * 3. Ereignisse melden: Fehler, Schleifensignal verloren, Maehen beendet,
  *    Messerwechsel faellig, schwacher Akku.
- * 4. MQTT bei Aenderung, mindestens halbstuendlich.
- * 5. Das Lebenszeichen fortschreiben.
+ * 4. Das Lebenszeichen fortschreiben.
+ * 5. MQTT bei Aenderung, mindestens halbstuendlich, danach das Lebenszeichen.
+ *
+ * Die Reihenfolge 4 vor 5 ist seit 1.1.6 wichtig (A6): mo_mqtt_publish()
+ * las lauf.json, bevor mo_lauf_vermerken() es geschrieben hatte.
  */
 
 require_once __DIR__ . '/mower_lib.php';
@@ -117,20 +120,62 @@ mo_events_check();
  * unterschieden. Ohne eingerichteten Maeher gibt es nichts zu messen. */
 $mo_gemessen = 0;
 $mo_anzahl = 0;
+$mo_stand = array();
 
+/* ERST MESSEN. Der zweite Durchgang unten kostet nichts: mo_state()
+ * speichert das Ergebnis zwischen - auch das gescheiterte. */
 foreach (mo_mowers() as $n => $m) {
     $mo_anzahl++;
-    $st = mo_state($n);
-    if (!empty($st['ok'])) { $mo_gemessen = 1; }
-    /* Die Meldeflags gehoeren in die Signatur, sonst waeren sie zwar in der
-     * Nachricht - aber die Nachricht ginge nicht raus. ann und ptest aendern
-     * sich naemlich OHNE Zustandswechsel, allein durch Zeitablauf. Ohne sie
-     * in der Signatur bliebe ein ptest bis zum naechsten Zustandswechsel
-     * oder bis zum halbstuendlichen Lebenszeichen liegen - sein Fenster ist
-     * aber nur fuenf Minuten breit. */
-    $sig = json_encode(array($st['code'], $st['modus'], $st['batterie'], $st['fehler'],
-                             $st['stunden'], $st['messer_warn'], mo_meldeflags($n)));
-    if ($sig === false) { $sig = 'unlesbar'; }
+    $mo_stand[$n] = mo_state($n);
+    if (!empty($mo_stand[$n]['ok'])) { $mo_gemessen = 1; }
+}
+
+/* DANN das Lebenszeichen fortschreiben - und ZWAR VOR dem Senden.
+ *
+ * A6 (06.09.2026, gemessen): bis 1.1.5 stand diese Zeile UNTER der Schleife.
+ * mo_mqtt_publish() las lauf.json also noch im alten Stand, und in einem
+ * einzigen Lauf gingen erst der alte, dann der neue Zaehler hinaus:
+ *
+ *     publish maeher/status/ts       0            <- alt
+ *     publish maeher/status/zaehler  0
+ *     publish maeher/status/ts       1788652847   <- neu
+ *     publish maeher/status/zaehler  1
+ *
+ * Es wird IMMER fortgeschrieben, auch wenn kein Maeher geantwortet hat -
+ * genau dann ist es am wichtigsten: es unterscheidet "der Cron laeuft, der
+ * Maeher schweigt" von "der Cron laeuft gar nicht mehr". */
+$mo_lauf = mo_lauf_vermerken($mo_gemessen);
+
+/* DANN senden. */
+foreach ($mo_stand as $n => $st) {
+    /* A5 (06.09.2026, gemessen): bis 1.1.5 stand hier eine von Hand
+     * geschriebene Liste aus sieben Angaben. temperatur, feuchte, wlan,
+     * dauer, timer und messer_rest fehlten darin. Gemessen: Temperatur von
+     * 21,5 auf 33,3, Feuchte 48 auf 11, WLAN -55 auf -88 - ueber MQTT
+     * gingen DREI Datagramme hinaus (nur das Lebenszeichen), ueber HTTP im
+     * selben Augenblick TEMP=33.3;FEUCHTE=11.0;WLAN=-88. Wer auf MQTT
+     * umstellte, bekam eine Temperaturkurve mit halbstuendlichen Stufen.
+     *
+     * Die Signatur entsteht jetzt aus dem VOLLEN Wertsatz, also aus
+     * derselben Quelle wie die Antwortzeile - sie steht damit auch bei
+     * einem kuenftigen Feld von selbst richtig.
+     *
+     * TS und ZAEHLER bleiben ausdruecklich draussen: sie aendern sich bei
+     * JEDEM Durchgang, und mit ihnen in der Signatur ginge der ganze
+     * Wertsatz jede Minute hinaus. Sie gehen ueber mo_mqtt_lebenszeichen(),
+     * und zwar ebenfalls jede Minute.
+     *
+     * Die Meldeflags (ann, audio, push, ptest) stecken in mo_werte() und
+     * bleiben damit in der Signatur - ann und ptest aendern sich ohne
+     * Zustandswechsel, allein durch Zeitablauf, und das Fenster von ptest
+     * ist nur fuenf Minuten breit. */
+    /* 1.1.8 (07.09.2026, am Geraet gemessen): bis 1.1.7 entstand die
+     * Signatur hier aus mo_werte() allein - also ohne den Statustext,
+     * der als Thema <praefix>/status hinausgeht. Sechs Minuten lang
+     * wechselte der Text, ohne dass etwas gesendet wurde. Die Quelle
+     * steht jetzt an EINER Stelle in der Bibliothek, und der Text geht
+     * auf seine Klasse zurueckgefuehrt mit ein. */
+    $sig = mo_mqtt_signatur($n, $st);
     $sigf = mo_tmpdir() . '/mqtt_sig_' . $n . '.txt';
     $beat = mo_tmpdir() . '/mqtt_beat_' . $n;
     $old = is_file($sigf) ? (string) file_get_contents($sigf) : '';
@@ -141,16 +186,11 @@ foreach (mo_mowers() as $n => $m) {
     }
 }
 
-/* Das Lebenszeichen ZULETZT und IMMER - auch wenn kein Maeher geantwortet
- * hat. Genau dann ist es am wichtigsten: es unterscheidet "der Cron laeuft,
- * der Maeher schweigt" von "der Cron laeuft gar nicht mehr". */
-$mo_lauf = mo_lauf_vermerken($mo_gemessen);
-
-/* Und einmal senden, ohne auf einen Zustandswechsel zu warten: der
- * Zeitstempel aendert sich bei JEDEM Durchgang, und ueber MQTT gibt es kein
- * Alter - nur einen Zeitstempel, der frisch sein muss. Der
- * Doppelt-senden-Filter oben wird dafuer uebergangen. Es sind drei Themen,
- * nicht der ganze Wertesatz. */
+/* ZULETZT das Lebenszeichen senden, ohne auf einen Zustandswechsel zu
+ * warten: der Zeitstempel aendert sich bei JEDEM Durchgang, und ueber MQTT
+ * gibt es kein Alter - nur einen Zeitstempel, der frisch sein muss. Der
+ * Doppelt-senden-Filter oben wird dafuer uebergangen. Seit 1.1.6 gehen
+ * hier auch <praefix>/ts und <praefix>/zaehler je Maeher mit (A6). */
 mo_mqtt_lebenszeichen();
 
 echo 'OK;GEMESSEN=' . $mo_gemessen . ';MAEHER=' . $mo_anzahl

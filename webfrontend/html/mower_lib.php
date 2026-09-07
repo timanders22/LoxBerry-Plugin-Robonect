@@ -317,6 +317,31 @@ function mo_zweitschrift_schreiben($cfg)
 }
 
 /**
+ * Der Nur-Lesen-Riegel fuer den unangemeldeten Endpunkt.
+ *
+ * A1 (06.09.2026, gemessen): mower.php pruefte das Token ueber mo_cfg_ro()
+ * und war damit fuer die Aktionszweige lesend - der OFFENE Statuszweig ging
+ * aber ueber mo_state() -> mo_config() mit $erzeugen = true. Gemessen an
+ * einem nachgebauten LoxBerry (Konfigordner fort, Zweitschrift daneben):
+ * ein Aufruf ohne jeden Parameter und ohne Token legte mower.json an,
+ * 686 Byte, mit Kennwort und Aktionstoken. Dasselbe fuer ?refresh=1,
+ * ?json=1, ?debug=1 und ?dev=N; die Tokenzweige legten nichts an.
+ *
+ * Ein Schalter an mo_config() allein reicht nicht: geschrieben wird ueber
+ * mo_state(), mo_mowers() und mo_log(), die alle mo_config() ohne Argument
+ * rufen. Deshalb ein Riegel fuer den ganzen Prozess - mower.php legt ihn
+ * als Erstes um, cron.php und die Oberflaeche nicht.
+ *
+ * Rueckgabe: der aktuelle Stand. mo_nur_lesen(true) legt ihn um.
+ */
+function mo_nur_lesen($setzen = null)
+{
+    static $an = false;
+    if ($setzen !== null) { $an = (bool) $setzen; }
+    return $an;
+}
+
+/**
  * $erzeugen = false: NUR LESEN. Der unangemeldete Endpunkt ruft so.
  *
  * A6 (04.09.2026, gemessen): eine tokenlose, korrekt mit HTTP 403
@@ -330,6 +355,9 @@ function mo_zweitschrift_schreiben($cfg)
  * Die Selbstheilung ist richtig; sie gehoert nur hinter die Anmeldung.
  */
 function mo_config(&$zustand = null, $erzeugen = true) {
+    /* A1: der Riegel steht VOR allem anderen. Wer nur lesen darf, schreibt
+     * auch dann nicht, wenn ein Aufrufer $erzeugen vergisst. */
+    if (mo_nur_lesen()) { $erzeugen = false; }
     static $gemeldet = false;
     /* GEMESSEN beim Bauen dieser Fassung: die Zeile im Reiter Test meldete
      * "in Ordnung", obwohl die Datei beschaedigt war. Grund: der ERSTE
@@ -354,7 +382,13 @@ function mo_config(&$zustand = null, $erzeugen = true) {
              * GENAU EINE Protokollzeile je Prozess. */
             $zustand = 'kaputt';
             $cfg = null;
-            if (!$gemeldet) {
+            /* A9 (06.09.2026, gemessen): ein mit HTTP 403 abgewiesener Aufruf
+             * legte mower.json.kaputt an und schrieb eine Protokollzeile -
+             * je Anfrage eine, denn $gemeldet haelt nur innerhalb EINES
+             * Prozesses. Drei Aufrufe von aussen ergaben drei Zeilen.
+             * Beiseitelegen ist Schreiben und gehoert hinter $erzeugen; der
+             * ZUSTAND 'kaputt' wird weiterhin gemeldet, nur eben still. */
+            if ($erzeugen && !$gemeldet) {
                 $gemeldet = true;
                 $beiseite = $p['config'] . '.kaputt';
                 if (!is_file($beiseite)) { @copy($p['config'], $beiseite); }
@@ -537,7 +571,7 @@ function mo_log_tail($datei, $max = 200, $block = 8192) {
 function mo_log_roh($msg) {
     $p = mo_paths(); $f = $p['log'];
     if (!is_dir(dirname($f))) { @mkdir(dirname($f), 0775, true); }
-    @file_put_contents($f, '[' . date('Y-m-d H:i:s') . '] ' . $msg . "\n", FILE_APPEND);
+    @file_put_contents($f, '[' . date('Y-m-d H:i:s') . '] ' . mo_zeile_saeubern($msg) . "\n", FILE_APPEND);
 }
 
 function mo_log($msg) {
@@ -561,12 +595,55 @@ function mo_log($msg) {
         $pw = (string) (isset($m['pass']) ? $m['pass'] : '');
         if (strlen($pw) >= 4) { $msg = str_replace($pw, '***', $msg); }
     }
-    @file_put_contents($f, '[' . date('Y-m-d H:i:s') . '] ' . $msg . "\n", FILE_APPEND);
+    /* A13 (06.09.2026, gemessen): ?cmd=stop&p=%0a[2026-01-01 00:00:00] ...
+     * schrieb eine zweite, frei erfundene Zeile ins Protokoll. mo_log() war
+     * die einzige Stelle der Linie, an der ungeprueftes Fremdwort in eine
+     * Zeile geht - der MQTT-Weg schliesst dieselbe Klasse seit 1.0.13. */
+    @file_put_contents($f, '[' . date('Y-m-d H:i:s') . '] ' . mo_zeile_saeubern($msg) . "\n", FILE_APPEND);
 }
-function mo_log_if_changed($key, $line) {
-    $f = mo_tmpdir() . '/last_' . $key . '.txt';
-    $prev = is_file($f) ? (string) file_get_contents($f) : '';
-    if ($line !== $prev) { mo_log($key . ': ' . $line); @file_put_contents($f, $line); }
+
+/* ==================================================================
+ * A12 - Ein Dauerzustand gehoert in die gebremste Meldung
+ * ==================================================================
+ *
+ * GEMESSEN am Geraet (06.09.2026): mower.log trug 604 Zeilen, ALLE vom
+ * Schluessel status_1, rund 1,3 je Minute, auf einer Ramdisk. Der Filter
+ * "nur bei Aenderung" griff nie, weil der Wortlaut abwechselte:
+ *
+ *     Status=Connection timed out after 3003 milliseconds ...
+ *     Status=antwortet gerade nicht ...
+ *
+ * Das ist derselbe Zustand mit zwei Woertern: der Abruf laeuft in die
+ * Zeitgrenze, danach steht 60 s lang der Stumm-Merker. Verglichen wird
+ * deshalb die KLASSE (der Grund), nicht der Wortlaut - und zusaetzlich eine
+ * Frist, damit ein Dauerzustand hoechstens einmal je Stunde eine Zeile
+ * kostet. Wie viele Meldungen dabei zusammengefasst wurden, steht in der
+ * Zeile; sonst sieht ein stiller Zeitraum aus wie ein ruhiger.
+ *
+ * $klasse leer heisst: wie bisher am Wortlaut vergleichen.
+ */
+function mo_log_if_changed($key, $line, $klasse = '', $frist = 3600) {
+    $f = mo_tmpdir() . '/last_' . $key . '.json';
+    $alt = mo_json_lesen($f);
+    $alt += array('klasse' => null, 'line' => null, 'ts' => 0, 'zahl' => 0);
+    $vergleich = ($klasse !== '') ? 'klasse' : 'line';
+    $jetzt = ($klasse !== '') ? $klasse : $line;
+    $neu = ($alt[$vergleich] === null) || ((string) $alt[$vergleich] !== (string) $jetzt);
+    $ueberfaellig = (time() - (int) $alt['ts']) >= max(60, (int) $frist);
+    if (!$neu && !$ueberfaellig) {
+        $alt['zahl'] = (int) $alt['zahl'] + 1;
+        mo_write_json($f, $alt);
+        return false;
+    }
+    $zusatz = '';
+    if (!$neu && (int) $alt['zahl'] > 0) {
+        $zusatz = ' (unveraendert, ' . ((int) $alt['zahl'] + 1) . ' gleichartige Meldungen seit '
+                . date('H:i', (int) $alt['ts']) . ')';
+    }
+    mo_log($key . ': ' . $line . $zusatz);
+    mo_write_json($f, array('klasse' => ($klasse !== '' ? $klasse : null),
+                            'line' => $line, 'ts' => time(), 'zahl' => 0));
+    return true;
 }
 
 /* ---------------- Zugriff auf das Robonect-Modul ---------------- */
@@ -615,7 +692,15 @@ function mo_stumm($dev) {
     return (is_file($f) && time() - filemtime($f) < MO_STUMM_SEK) ? 1 : 0;
 }
 function mo_stumm_setzen($dev) { @touch(mo_tmpdir() . '/stumm_' . (int) $dev); }
-function mo_stumm_loeschen($dev) { @unlink(mo_tmpdir() . '/stumm_' . (int) $dev); }
+/* A24 (06.09.2026, gemessen): ohne die Wache erzeugte JEDER erfolgreiche
+ * Abruf zwei Meldungen "unlink(/tmp/robonect/stumm_1): No such file or
+ * directory" - zwei, weil mo_api_roh() je Abruf zweimal laeuft (status und
+ * health). Unter 7.4 wie unter 8.4. Dieselbe Klasse, die mo_json_lesen()
+ * weiter unten ausdruecklich behandelt. */
+function mo_stumm_loeschen($dev) {
+    $f = mo_tmpdir() . '/stumm_' . (int) $dev;
+    if (is_file($f)) { @unlink($f); }
+}
 
 /**
  * Ruft die JSON-Schnittstelle auf. Zugangsdaten per HTTP-Basic-Auth
@@ -649,7 +734,7 @@ function mo_api_roh($cmd, $dev = 1, $extra = '', $tmo = 3) {
     $m = mo_mower($dev);
     if ($m === null) { return array(null, 'nicht_konfiguriert', 'Maeher nicht konfiguriert'); }
     // Antwortet er gerade nicht, gar nicht erst warten.
-    if (mo_stumm($dev)) { return array(null, 'stumm', 'antwortet gerade nicht'); }
+    if (mo_stumm($dev)) { return array(null, 'stumm', mo_text_nicht_erreichbar()); }
 
     $url = 'http://' . $m['ip'] . '/json?cmd=' . rawurlencode($cmd) . ($extra !== '' ? '&' . $extra : '');
     $kopf = array('Accept: application/json');
@@ -790,6 +875,52 @@ function mo_mode_text($mode) {
     return isset($t[(int) $mode]) ? $t[(int) $mode] : 'unbekannt';
 }
 
+/**
+ * Einen Zahlenwert aus der Antwort des Moduls holen - oder den Fehlwert.
+ *
+ * A7 (06.09.2026, gemessen): bis 1.1.5 stand ueberall
+ * "isset($s['battery']) ? (int) $s['battery'] : 0". Gemessen an einer
+ * Attrappe des Moduls:
+ *
+ *   fehlt "battery"                 -> BATT=0 bei OK=1
+ *   "battery":"voll"                -> BATT=0 bei OK=1
+ *   "error_code":"E17" mit Text
+ *   "Messer blockiert"              -> FEHLER=0 bei OK=1
+ *
+ * Eine 0 ist bei diesen Feldern ein GUELTIGER Messwert - genau die
+ * Ueberlegung, die der Kommentar A10 weiter unten fuer den
+ * Verbindungsabriss anstellt. Fuer das fehlende oder untaugliche Feld fehlte
+ * sie. $fehlt sammelt die Namen, damit der Ausfall benannt und nicht
+ * stillschweigend zu einer Zahl wird.
+ */
+function mo_zahl_aus($quelle, $name, $fehlwert, array &$fehlt)
+{
+    if (!is_array($quelle) || !array_key_exists($name, $quelle)) {
+        $fehlt[] = $name;
+        return $fehlwert;
+    }
+    $w = $quelle[$name];
+    if (is_bool($w) || is_array($w) || is_object($w) || $w === null || !is_numeric($w)) {
+        $fehlt[] = $name;
+        return $fehlwert;
+    }
+    return $w + 0;
+}
+
+/**
+ * Grund -> Klasse fuer die Protokollbremse.
+ *
+ * A12: 'stumm' ist kein eigener Zustand, sondern die Erinnerung an den
+ * vorigen - beide heissen "nicht erreichbar". Ohne diese Zusammenfassung
+ * wechselt der Wortlaut im Minutentakt zwischen "Connection timed out" und
+ * "antwortet gerade nicht", und die Bremse greift nie.
+ */
+function mo_grund_klasse($grund)
+{
+    if ($grund === 'keine_antwort' || $grund === 'stumm') { return 'nicht_erreichbar'; }
+    return ((string) $grund !== '') ? (string) $grund : 'ok';
+}
+
 /** Kompletter Zustand eines Maehers (mit Cache). */
 function mo_state($dev = 1, $force = false) {
     $cfg = mo_config();
@@ -832,22 +963,44 @@ function mo_state($dev = 1, $force = false) {
         $st['ok'] = 1;
         $st['grund'] = '';
         $s = $j['status'];
-        $st['code'] = isset($s['status']) ? (int) $s['status'] : -1;
+        /* A7: jedes Feld ueber mo_zahl_aus(). Wo die Spanne es hergibt, ist
+         * der Fehlwert -1 bzw. -999 wie im Abrisszweig; wo MinVal 0 ist
+         * (STUNDEN, DAUER, TIMER), bleibt 0 - der Ausfall steht dann im
+         * Grund und im Protokoll, nicht in einer erfundenen Zahl. */
+        $mo_fehlt = array();
+        $st['code'] = (int) mo_zahl_aus($s, 'status', -1, $mo_fehlt);
         $st['text'] = mo_status_text($st['code']);
-        $st['batterie'] = isset($s['battery']) ? (int) $s['battery'] : 0;
-        $st['stunden'] = isset($s['hours']) ? (int) $s['hours'] : 0;
-        $st['dauer'] = isset($s['duration']) ? (int) round(((int) $s['duration']) / 60) : 0; // s -> min
-        $st['modus'] = isset($s['mode']) ? (int) $s['mode'] : -1;
+        $st['batterie'] = (int) mo_zahl_aus($s, 'battery', -1, $mo_fehlt);
+        $st['stunden'] = (int) mo_zahl_aus($s, 'hours', 0, $mo_fehlt);
+        $st['dauer'] = (int) round(((int) mo_zahl_aus($s, 'duration', 0, $mo_fehlt)) / 60); // s -> min
+        $st['modus'] = (int) mo_zahl_aus($s, 'mode', -1, $mo_fehlt);
         $st['modus_text'] = mo_mode_text($st['modus']);
         $st['maeht'] = ($st['code'] === 2) ? 1 : 0;
         $st['laedt'] = ($st['code'] === 4) ? 1 : 0;
-        if (isset($j['wlan']['signal'])) { $st['wlan'] = (int) $j['wlan']['signal']; }
-        if (isset($j['timer']['status'])) { $st['timer'] = (int) $j['timer']['status']; }
-        if (isset($j['error'])) {
-            $st['fehler'] = isset($j['error']['error_code']) ? (int) $j['error']['error_code'] : 0;
-            $st['fehlertext'] = isset($j['error']['error_message']) ? (string) $j['error']['error_message'] : '';
+        if (isset($j['wlan']) && is_array($j['wlan'])) {
+            $st['wlan'] = (int) mo_zahl_aus($j['wlan'], 'signal', -999, $mo_fehlt);
+        }
+        if (isset($j['timer']) && is_array($j['timer'])) {
+            $st['timer'] = (int) mo_zahl_aus($j['timer'], 'status', 0, $mo_fehlt);
+        }
+        if (isset($j['error']) && is_array($j['error'])) {
+            $st['fehlertext'] = isset($j['error']['error_message'])
+                ? mo_zeile_saeubern($j['error']['error_message']) : '';
+            $mo_ecode = array();
+            $st['fehler'] = (int) mo_zahl_aus($j['error'], 'error_code', 0, $mo_ecode);
+            /* Ein Fehlercode, der keine Zahl ist, darf nicht zu 0 werden:
+             * 0 heisst "kein Fehler". Es GIBT einen, er laesst sich nur
+             * nicht beziffern - dafuer steht die 1, wie eine Zeile tiefer
+             * fuer den Status 7. Der Klartext bleibt erhalten. */
+            if ($mo_ecode && $st['fehlertext'] !== '') { $st['fehler'] = 1; }
+            $mo_fehlt = array_merge($mo_fehlt, $mo_ecode);
         }
         if ($st['code'] === 7 && $st['fehler'] === 0) { $st['fehler'] = 1; }
+        if ($mo_fehlt) {
+            $st['grund'] = 'feld_fehlt';
+            $st['grundtext'] = 'Das Modul liefert keine brauchbare Zahl fuer: '
+                             . implode(', ', array_unique($mo_fehlt));
+        }
     } elseif ($st['grundtext'] !== '') {
         // Der Grund gehoert in den angezeigten Text, nicht nur ins Protokoll.
         $st['text'] = $st['grundtext'];
@@ -872,8 +1025,15 @@ function mo_state($dev = 1, $force = false) {
         $st['messer_warn'] = $st['messer_rest'] <= 0 ? 1 : 0;
     }
     mo_write_json($cache, $st);
+    /* A12: solange der Maeher antwortet, wird wie bisher am WORTLAUT
+     * verglichen - ein Wechsel von "parkt" auf "maeht" gehoert sofort ins
+     * Protokoll. Antwortet er nicht, wird an der KLASSE verglichen und
+     * hoechstens einmal je Stunde geschrieben; sonst kostet ein stummer
+     * Maeher rund 1,3 Zeilen je Minute auf einer Ramdisk (am Geraet
+     * gemessen: 604 Zeilen, alle vom selben Schluessel). */
     mo_log_if_changed('status_' . $dev, 'Status=' . $st['text'] . ' Modus=' . $st['modus_text']
-        . ' Batterie=' . $st['batterie'] . '% Fehler=' . $st['fehler'] . ' Stunden=' . $st['stunden']);
+        . ' Batterie=' . $st['batterie'] . '% Fehler=' . $st['fehler'] . ' Stunden=' . $st['stunden'],
+        ($st['ok'] === 1 && $st['grund'] === '') ? '' : mo_grund_klasse($st['grund']));
     return $st;
 }
 
@@ -887,11 +1047,31 @@ function mo_state($dev = 1, $force = false) {
  * Trockenlauf, der einen anderen Weg nimmt, ist keiner: er wuerde genau die
  * Fehler nicht finden, wegen derer man ihn baut. Der Rueckgabewert ist 2
  * ("nicht ausgefuehrt"), damit ein Erfolg nie vorgetaeuscht wird.
+ *
+ * A8 (06.09.2026, gemessen): mower.php leitete den HTTP-Statuscode aus dem
+ * MELDUNGSTEXT ab (strpos auf 'unbekannt'). "Unbekannter Auftragsparameter"
+ * beginnt mit grossem U und fiel durch - eine fehlerhafte Anfrage wurde mit
+ * HTTP 502 beantwortet, also als Geraeteausfall. Deshalb gibt es jetzt ein
+ * drittes Rueckgabefeld, das die ART nennt:
+ *
+ *     'anfrage'  die Anfrage taugt nicht        -> 400
+ *     'anlage'   die Anlage ist nicht eingerichtet -> 409
+ *     'geraet'   das Geraet hat nicht geliefert -> 502
+ *     'probe'    Trockenlauf                    -> 200
+ *     ''         alles gut                      -> 200
+ *
+ * list($ok, $info) bei aelteren Aufrufern bleibt gueltig.
  */
 function mo_command($cmd, $dev = 1, $param = '', $probe = false) {
     $m = mo_mower($dev);
-    if ($m === null) { return array(0, 'Maeher nicht konfiguriert'); }
+    if ($m === null) { return array(0, 'Maeher nicht konfiguriert', 'anlage'); }
     $cmd = strtolower(trim((string) $cmd));
+    /* A13: bis 1.1.5 wurde ?p= bei jedem Befehl angenommen und ausser bei
+     * job wirkungslos verworfen - und ging trotzdem in die Protokollzeile.
+     * Abgewiesen und gemeldet statt still ignoriert. */
+    if ($cmd !== 'job' && trim((string) $param) !== '') {
+        return array(0, 'Der Parameter p gilt nur fuer den Befehl job', 'anfrage');
+    }
     $map = array('auto' => array('mode', 'mode=auto'), 'manuell' => array('mode', 'mode=man'),
                  'man' => array('mode', 'mode=man'), 'home' => array('mode', 'mode=home'),
                  'eod' => array('mode', 'mode=eod'), 'start' => array('start', ''),
@@ -911,16 +1091,16 @@ function mo_command($cmd, $dev = 1, $param = '', $probe = false) {
             foreach (explode('&', $roh) as $stueck) {
                 if ($stueck === '') { continue; }
                 if (strpos($stueck, '=') === false) {
-                    return array(0, 'Unzulaessiger Auftragsparameter: ' . mo_kuerzen($stueck, 40));
+                    return array(0, 'Unzulaessiger Auftragsparameter: ' . mo_kuerzen($stueck, 40), 'anfrage');
                 }
                 list($k, $v) = explode('=', $stueck, 2);
                 $k = strtolower(trim($k));
                 if (!in_array($k, $erlaubt, true)) {
                     return array(0, 'Unbekannter Auftragsparameter: ' . mo_kuerzen($k, 40)
-                                  . ' (erlaubt: ' . implode(', ', $erlaubt) . ')');
+                                  . ' (erlaubt: ' . implode(', ', $erlaubt) . ')', 'anfrage');
                 }
                 if (preg_match('/^[0-9A-Za-z:.\-]{1,16}$/', $v) !== 1) {
-                    return array(0, 'Unzulaessiger Wert fuer ' . $k . ': ' . mo_kuerzen($v, 40));
+                    return array(0, 'Unzulaessiger Wert fuer ' . $k . ': ' . mo_kuerzen($v, 40), 'anfrage');
                 }
                 $teile[] = rawurlencode($k) . '=' . rawurlencode($v);
             }
@@ -930,20 +1110,20 @@ function mo_command($cmd, $dev = 1, $param = '', $probe = false) {
     } elseif (isset($map[$cmd])) {
         $ziel = $map[$cmd];
     } else {
-        return array(0, 'unbekannter Befehl');
+        return array(0, 'unbekannter Befehl', 'anfrage');
     }
     if ($probe) {
         /* Die Adresse wird gezeigt, das Passwort nicht - es geht ohnehin
          * ueber die Kopfzeile, nicht ueber die Adresse. */
         return array(2, 'Trockenlauf - wuerde senden: http://' . $m['ip'] . '/json?cmd='
                       . $ziel[0] . ($ziel[1] !== '' ? '&' . $ziel[1] : '')
-                      . ' an ' . $m['name']);
+                      . ' an ' . $m['name'], 'probe');
     }
     $j = mo_api($ziel[0], $dev, $ziel[1]);
     $ok = (is_array($j) && (!isset($j['successful']) || $j['successful'])) ? 1 : 0;
     mo_log('Befehl "' . $cmd . ($param !== '' ? ' ' . $param : '') . '" an ' . $m['name'] . ' -> ' . ($ok ? 'OK' : 'FEHLER'));
     @unlink(mo_tmpdir() . '/state_' . (int) $dev . '.json'); // Status neu holen
-    return array($ok, $ok ? 'ausgefuehrt' : 'fehlgeschlagen');
+    return array($ok, $ok ? 'ausgefuehrt' : 'fehlgeschlagen', $ok ? '' : 'geraet');
 }
 
 /** Messerwechsel quittieren: aktuelle Betriebsstunden als neuen Nullpunkt speichern. */
@@ -990,8 +1170,23 @@ function mo_blade_reset($dev = 1) {
  */
 function mo_mqtt_wert_saeubern($v)
 {
+    return mo_zeile_saeubern($v);
+}
+
+/**
+ * Steuerzeichen aus einem Wert nehmen, der in EINE ZEILE geht.
+ *
+ * Zwei Verbraucher, eine Stelle: der UDP-Eingang des Gateways liest
+ * zeilenweise, und eine Protokollzeile ist ebenfalls eine Zeile. Bis 1.1.5
+ * raeumte diese Funktion nur CR, LF und Tabulator weg; gemessen gingen
+ * \x01 und \x7f unveraendert durch, und der Protokollweg benutzte sie
+ * ueberhaupt nicht (A13).
+ */
+function mo_zeile_saeubern($v)
+{
     $wert = str_replace(array("\r\n", "\r", "\n", "\t"), ' ', (string) $v);
-    return trim(preg_replace('/ {2,}/', ' ', $wert));
+    $wert = preg_replace('/[\x00-\x1F\x7F]/', ' ', $wert);
+    return trim(preg_replace('/ {2,}/', ' ', (string) $wert));
 }
 
 /**
@@ -1052,6 +1247,167 @@ function mo_mqtt_senden($port, array $zeilen)
     return $n;
 }
 
+/* ==================================================================
+ * A4 - Zustaende zurueckbehalten, Messwerte nicht, das Lebenszeichen nie
+ * ==================================================================
+ *
+ * Hausstandard seit 03.09.2026 (Regeln/07, Abschnitt 3). Bis 1.1.5 schrieb
+ * diese Linie ausnahmslos 'publish '.
+ *
+ * GEMESSEN am 06.09.2026, drei Wege:
+ *   Pruefstand (eigener UDP-Horchposten)  32 Zeilen, 32x publish, 0x retain
+ *   Broker dieser Anlage, maeher/#        0 zurueckbehaltene Themen
+ *   Gegenprobe Weather4Loxone/#           2007  -> die Messung sieht retained
+ *   Gegenprobe saugrobo/                  38    -> das Gateway KANN es
+ *
+ * Der Saugroboter ist die Schwesterlinie derselben Bauart und schon
+ * umgestellt (robo_lib.php:1364, am Geraet gelesen). Der UDP-Eingang des
+ * Gateways kennt "retain <thema> <wert>" - belegt durch die 38 Themen.
+ *
+ * FALLE, die MarstekVenus mitgemessen hat: ein 'retain' mit LEEREM Wert
+ * LOESCHT das Thema, statt es zu setzen. Ein leerer Wert geht deshalb als
+ * 'publish' hinaus.
+ *
+ * Was ein Zustand ist und was ein Messwert, steht hier - und NUR hier.
+ * mo_selbsttest() haelt die Liste gegen die wirklich gesendeten Themen; ein
+ * Thema ohne Entscheidung ist ein Befund, kein stilles 'publish'.
+ *
+ * $schluessel ist das Thema OHNE Praefix: 'ok', 'batterie', 'status/ts'.
+ */
+function mo_mqtt_zustaende()
+{
+    return array('ok', 'code', 'status', 'modus', 'maeht', 'laedt', 'fehler',
+                 'messer_warn', 'timer', 'ann', 'audio', 'push', 'ptest');
+}
+
+/**
+ * Das Gegenstueck: Messwerte mit Zeitbezug. Sie gehen fluechtig hinaus,
+ * damit nach einem Ausfall kein alter Wert als aktuell erscheint.
+ *
+ * Beide Listen zusammen muessen JEDES gesendete Thema abdecken -
+ * mo_retainprobe() im Reiter Test zaehlt das nach. Wer ein Feld ergaenzt,
+ * muss sich entscheiden; ein Thema ohne Entscheidung ist ein Befund und
+ * kein stilles 'publish'.
+ */
+function mo_mqtt_messwerte()
+{
+    return array('batterie', 'stunden', 'dauer', 'messer_rest', 'temperatur',
+                 'feuchte', 'wlan', 'fehleralter',
+                 'einsheute', 'minheute', 'einswoche', 'minwoche');
+}
+
+/** Ist fuer dieses Thema ueberhaupt entschieden, ob es retained geht? */
+function mo_mqtt_entschieden($schluessel)
+{
+    $s = (string) $schluessel;
+    return in_array($s, mo_mqtt_zustaende(), true)
+        || in_array($s, mo_mqtt_messwerte(), true)
+        || $s === 'ts' || $s === 'zaehler'
+        || strpos($s, 'status/') === 0;
+}
+
+function mo_mqtt_retain($schluessel)
+{
+    /* Das Lebenszeichen nie - retained zeigte es immer "lebt". Es traegt
+     * den Zeitstempel, und der Miniserver rechnet daraus das Alter. */
+    if (strpos((string) $schluessel, 'status/') === 0
+        || $schluessel === 'ts' || $schluessel === 'zaehler') {
+        return false;
+    }
+    return in_array((string) $schluessel, mo_mqtt_zustaende(), true);
+}
+
+/**
+ * Eine Zeile fuer den UDP-Eingang bauen - EINE Stelle fuer publish und retain.
+ */
+function mo_mqtt_zeile($thema, $schluessel, $wert)
+{
+    $w = mo_zeile_saeubern($wert);
+    $befehl = (mo_mqtt_retain($schluessel) && $w !== '') ? 'retain' : 'publish';
+    return $befehl . ' ' . $thema . ' ' . $w;
+}
+
+/* ==================================================================
+ * 1.1.8 (07.09.2026): der Statustext gehoert in die Signatur - und er
+ * muss dafuer erst stabil werden
+ * ==================================================================
+ *
+ * Am Geraet gemessen (07.09.2026, sechs Minuten am laufenden Broker): der
+ * Text in state_1.json wechselte zwischen "antwortet gerade nicht" und
+ * "Connection timed out after 3002/3003 milliseconds", waehrend die
+ * Aenderungssignatur unveraendert auf a788abc3... stand. Beides zusammen
+ * ist ein Widerspruch:
+ *
+ *   - Die Signatur entstand aus mo_werte(), und mo_werte() fuehrt nur
+ *     Zahlenfelder. Der MQTT-Satz traegt aber ein Thema 'status' mit einem
+ *     TEXT. Der konnte sich also aendern, ohne dass etwas hinausging - das
+ *     zurueckbehaltene <praefix>/status stand auf dem Wortlaut des letzten
+ *     ZAHLENwechsels.
+ *   - Den Text einfach mit aufzunehmen waere schlimmer als der Befund
+ *     gewesen: der volle Satz aus 26 Datagrammen ginge kuenftig jede
+ *     Minute hinaus, nur weil curl eine andere Millisekundenzahl nennt.
+ *     Am Geraet gemessen: der UDP-Eingang des Gateways verwirft schon
+ *     heute schubweise Datagramme (777 in 120 s) - mehr Verkehr ist dort
+ *     das Letzte, was hilft.
+ *
+ * Deshalb zwei Schritte in einem: der Text wird fuer den MQTT-Weg auf
+ * seine KLASSE zurueckgefuehrt - mo_grund_klasse() gibt es seit 1.1.6 fuer
+ * die Protokollbremse (A12), dieselbe Ursache, dieselbe Antwort -, und
+ * ERST DANN geht er in die Signatur. Ein echter Wechsel ("parkt" auf
+ * "maeht", erreichbar auf nicht erreichbar, Abriss auf falsches Passwort)
+ * loest damit sofort einen Versand aus, die Millisekundenzahl nicht.
+ *
+ * Der ausfuehrliche Wortlaut geht nirgends verloren: er steht weiter in
+ * $st['grundtext'], im Protokoll und in der Oberflaeche - dort, wo ein
+ * Mensch nachsieht, wenn er wissen will, WARUM der Maeher schweigt.
+ * ================================================================== */
+
+/** Der eine Wortlaut fuer "der Maeher antwortet nicht" - eine Quelle. */
+function mo_text_nicht_erreichbar() { return 'antwortet gerade nicht'; }
+
+/**
+ * Der Text, der als Thema <praefix>/status hinausgeht.
+ *
+ * Nicht $st['text']: der traegt bei einem Verbindungsabriss den Wortlaut
+ * von curl samt Millisekundenzahl, und der wechselt von Lauf zu Lauf.
+ * Jede andere Klasse - nicht eingerichtet, Anmeldung, abgewiesen, und
+ * natuerlich der erreichbare Maeher - behaelt ihren Text unveraendert.
+ */
+function mo_mqtt_status($st)
+{
+    if (!is_array($st)) { return ''; }
+    $grund = isset($st['grund']) ? $st['grund'] : '';
+    if (mo_grund_klasse($grund) === 'nicht_erreichbar') {
+        return mo_text_nicht_erreichbar();
+    }
+    return isset($st['text']) ? (string) $st['text'] : '';
+}
+
+/**
+ * Woraus die Aenderungssignatur entsteht - EINE Stelle fuer cron.php und
+ * fuer die Selbstpruefung.
+ *
+ * TS und ZAEHLER bleiben ausdruecklich draussen: sie aendern sich bei JEDEM
+ * Durchgang, und mit ihnen in der Signatur ginge der ganze Wertsatz jede
+ * Minute hinaus. Sie gehen ueber mo_mqtt_lebenszeichen(), und zwar
+ * ebenfalls jede Minute.
+ */
+function mo_mqtt_signatur_quelle($dev = 1, $st = null)
+{
+    if ($st === null) { $st = mo_state($dev); }
+    $w = mo_werte($dev, $st);
+    unset($w['TS'], $w['ZAEHLER']);
+    $w['STATUSTEXT'] = mo_mqtt_status($st);
+    return $w;
+}
+
+/** Dieselbe Quelle als Signatur. */
+function mo_mqtt_signatur($dev = 1, $st = null)
+{
+    $j = json_encode(mo_mqtt_signatur_quelle($dev, $st));
+    return ($j === false) ? 'unlesbar' : sha1($j);
+}
+
 function mo_mqtt_publish($st = null, $dev = 1) {
     $cfg = mo_config();
     if (empty($cfg['mqtt_enabled'])) { return; }
@@ -1066,7 +1422,7 @@ function mo_mqtt_publish($st = null, $dev = 1) {
     $wurzel = mo_mqtt_praefix($cfg['mqtt_topic']);
     $prefix = $wurzel;
     if ((int) $dev > 1) { $prefix .= '/' . (int) $dev; }
-    $m = array('ok' => $st['ok'], 'code' => $st['code'], 'status' => $st['text'], 'modus' => $st['modus'],
+    $m = array('ok' => $st['ok'], 'code' => $st['code'], 'status' => mo_mqtt_status($st), 'modus' => $st['modus'],
                'batterie' => $st['batterie'], 'maeht' => $st['maeht'], 'laedt' => $st['laedt'],
                'fehler' => $st['fehler'], 'stunden' => $st['stunden'], 'dauer' => $st['dauer'],
                'messer_rest' => $st['messer_rest'], 'messer_warn' => $st['messer_warn'],
@@ -1078,10 +1434,16 @@ function mo_mqtt_publish($st = null, $dev = 1) {
      * Werte und merkte es erst, wenn der Test-Push nicht mehr ausloeste. */
     $m = array_merge($m, mo_meldeflags($dev));
     $m = array_merge($m, mo_zusatzwerte($dev));
+    /* A6: ts und zaehler gehen bei JEDEM Durchgang ueber
+     * mo_mqtt_lebenszeichen() hinaus - dort sind sie frisch. Hier waeren
+     * sie der Stand vor mo_lauf_vermerken(). Zwei Absender fuer dasselbe
+     * Thema sind eine Quelle zu viel; dieser hier faellt weg. Ueber HTTP
+     * bleiben die Felder TS und ZAEHLER unveraendert (mo_werte()). */
+    unset($m['ts'], $m['zaehler']);
 
     $zeilen = array();
     foreach ($m as $k => $v) {
-        $zeilen[] = 'publish ' . $prefix . '/' . $k . ' ' . mo_mqtt_wert_saeubern($v);
+        $zeilen[] = mo_mqtt_zeile($prefix . '/' . $k, $k, $v);
     }
 
     /* ==============================================================
@@ -1108,11 +1470,11 @@ function mo_mqtt_publish($st = null, $dev = 1) {
      * danach negativ oder stundenlang sein, obwohl alles laeuft. Eine
      * umlaufende Zahl nicht.
      * ============================================================== */
-    $lauf = mo_lauf_lesen();
-    $zeilen[] = 'publish ' . $wurzel . '/status/ts ' . (int) $lauf['ts'];
-    $zeilen[] = 'publish ' . $wurzel . '/status/zaehler ' . (int) $lauf['zaehler'];
-    $zeilen[] = 'publish ' . $wurzel . '/status/ok ' . (int) $lauf['ok'];
-
+    /* A6 (06.09.2026, gemessen): diese drei Zeilen standen hier UND in
+     * mo_mqtt_lebenszeichen(). In einem einzigen Cron-Lauf gingen deshalb
+     * erst der alte, dann der neue Zaehlerstand hinaus - mo_mqtt_publish()
+     * laeuft vor mo_lauf_vermerken(). Sie stehen jetzt nur noch an einer
+     * Stelle; cron.php ruft das Lebenszeichen nach dem Vermerken. */
     mo_mqtt_senden($udp, $zeilen);
 }
 
@@ -1138,11 +1500,26 @@ function mo_mqtt_lebenszeichen()
     if (!$udp) { return 0; }
     $w = mo_mqtt_praefix($cfg['mqtt_topic']);
     $lauf = mo_lauf_lesen();
-    return mo_mqtt_senden($udp, array(
+    $zeilen = array(
         'publish ' . $w . '/status/ts ' . (int) $lauf['ts'],
         'publish ' . $w . '/status/zaehler ' . (int) $lauf['zaehler'],
         'publish ' . $w . '/status/ok ' . (int) $lauf['ok'],
-    ));
+    );
+    /* A6 (06.09.2026, gemessen): maeher/ts und maeher/zaehler kommen aus
+     * mo_zusatzwerte() und gingen deshalb nur mit dem vollen Wertsatz
+     * hinaus - also bei Zustandswechsel oder alle 1800 s, und dann mit dem
+     * Stand VOR mo_lauf_vermerken(). Im Mitschnitt blieben sie ueber Laeufe
+     * hinweg auf 0 stehen, waehrend maeher/status/zaehler weiterzaehlte.
+     * Die Thementabelle im Reiter verspricht fuer beide ausdruecklich
+     * "steht er still, laeuft der Cron nicht mehr". Sie gehen jetzt bei
+     * JEDEM Durchgang mit - unter denselben Namen, damit bestehende
+     * Anlagen nichts aendern muessen. */
+    foreach (array_keys(mo_mowers()) as $mo_n) {
+        $mo_pre = $w . ((int) $mo_n > 1 ? '/' . (int) $mo_n : '');
+        $zeilen[] = 'publish ' . $mo_pre . '/ts ' . (int) $lauf['ts'];
+        $zeilen[] = 'publish ' . $mo_pre . '/zaehler ' . (int) $lauf['zaehler'];
+    }
+    return mo_mqtt_senden($udp, $zeilen);
 }
 
 /* ==================================================================
@@ -1498,8 +1875,15 @@ function mo_events_check() {
             mo_log('Meldung: ' . $meldung);
             if (!empty($cfg['notify']['audio'])) { mo_say('Hallo! ' . $meldung); }
         }
-        mo_write_json($f, array('code' => $st['code'], 'ts' => time(),
-                                'maeh_start' => $maeh_start));
+        /* A3 (06.09.2026, gemessen): bis 1.1.5 wurde hier auch der Fehlwert
+         * -1 gespeichert. Vier Cron-Laeufe (parkt, maeht, Abriss, parkt):
+         * statistik.json blieb LEER, maeh_start blieb stehen und ging in den
+         * naechsten Einsatz; ohne den Abriss zaehlte derselbe Ablauf
+         * richtig. Der Kommentar oben sagt "bei -1 wissen wir nichts und
+         * lassen die Uhr laufen" - dann darf die -1 auch den zuletzt
+         * GEMESSENEN Code nicht ueberschreiben. */
+        mo_write_json($f, array('code' => ($st['code'] >= 0 ? $st['code'] : $pcode),
+                                'ts' => time(), 'maeh_start' => $maeh_start));
     }
     foreach (array('messer_', 'akku_') as $pre) {
         foreach (glob(mo_tmpdir() . '/' . $pre . '*') ?: array() as $g) {
@@ -1603,6 +1987,32 @@ function mo_check($feld) { return '\i;' . $feld . '=\i\v'; }
  * Wer ein Feld baut, das -1 als "nicht bekannt" sendet, setzt MinVal="-1".
  * NEUE Felder werden HINTEN angehaengt - bestehende Projekte finden sonst
  * nicht mehr, was sie suchen. */
+/* ==================================================================
+ * 1.1.7 (06.09.2026): Umlaute in den Feldbeschriftungen
+ * ==================================================================
+ *
+ * Spalte 5 wandert als Comment in die Importvorlage; Loxone Config macht
+ * daraus den ANZEIGENAMEN der Kachel. Bis 1.1.6 stand dort ASCII-Umschrift
+ * ("1 = Maeher erreichbar"), und dieselben Texte erscheinen auch in der
+ * Oberflaeche des Plugins - im Reiter MQTT und in der Feldtabelle.
+ *
+ * Elf Beschriftungen sind umgestellt: die neun, die
+ * Werkzeuge/vorlagen_pruefen.py meldet, und zusaetzlich "maeht" und
+ * "laedt". Die beiden kennt die Wortliste des Werkzeugs nicht - sie
+ * stehenzulassen haette dieselbe Tabelle halb umgestellt zurueckgelassen.
+ * Dazu vier Erklaerungen aus Spalte 6, die nur in der Oberflaeche
+ * erscheinen.
+ *
+ * OHNE WIRKUNG AUF EINE LAUFENDE ANLAGE: ein geaenderter Comment ist beim
+ * erneuten Import harmlos - Loxone Config legt ohnehin neu an, und der
+ * Anzeigename haengt nicht am Suchtext. Die TITEL (MOWER_OK, MOWER_CODE, ...)
+ * und die Suchtexte sind unveraendert; ein geaenderter Titel legte neue
+ * Bausteine NEBEN die alten.
+ *
+ * NICHT umgestellt ist die Einheit 'GradC' weiter unten. Sie geht sowohl in
+ * den Comment als auch in das Attribut Unit - ob dort '°C' stehen soll, ist
+ * eine eigene Entscheidung.
+ * ================================================================== */
 function mo_felder() {
     $cfg = mo_config();
     $f = array(
@@ -1611,37 +2021,37 @@ function mo_felder() {
          *                 lange Erklaerung (nur in der Oberflaeche, optional).
          * Die fuenfte Spalte wandert als Comment in die Importvorlage, und
          * Loxone Config macht daraus den Anzeigenamen - deshalb kurz. */
-        'OK'         => array(0, 0, 1,    '',    '1 = Maeher erreichbar'),
-        'CODE'       => array(1, -1, 99,  '',    'Statuszahl des Maehers',
+        'OK'         => array(0, 0, 1,    '',    '1 = Mäher erreichbar'),
+        'CODE'       => array(1, -1, 99,  '',    'Statuszahl des Mähers',
                               'Robonect-Status, -1 = keine Verbindung'),
         'MODUS'      => array(1, -1, 99,  '',    'Betriebsmodus',
                               'Auto, Manuell, Zuhause, Auftrag; -1 = unbekannt'),
         'BATT'       => array(1, -1, 100, '%',   'Batterie in Prozent',
-                              '-1 = nicht bekannt, der Maeher antwortet nicht'),
-        'MAEHT'      => array(0, 0, 1,    '',    '1 = maeht gerade'),
-        'LAEDT'      => array(0, 0, 1,    '',    '1 = laedt gerade'),
+                              '-1 = nicht bekannt, der Mäher antwortet nicht'),
+        'MAEHT'      => array(0, 0, 1,    '',    '1 = mäht gerade'),
+        'LAEDT'      => array(0, 0, 1,    '',    '1 = lädt gerade'),
         'FEHLER'     => array(1, 0, 10000,'',    'Fehlercode (0 = kein Fehler)'),
-        'STUNDEN'    => array(1, 0, 100000,'h',  'Maehstunden gesamt'),
+        'STUNDEN'    => array(1, 0, 100000,'h',  'Mähstunden gesamt'),
         'DAUER'      => array(1, 0, 10000,'min', 'Dauer des laufenden Einsatzes'),
         'MESSER'     => array(1, -1, 10000,'h',  'Messer: Reststunden',
                               'bis zum Wechsel, -1 = nicht bekannt'),
-        'MESSERWARN' => array(0, 0, 1,    '',    '1 = Messerwechsel faellig'),
-        'TEMP'       => array(1, -999, 80, 'GradC','Temperatur am Maeher',
-                              '-999 = nicht bekannt; -1 waere hier ein gueltiger Messwert'),
-        'FEUCHTE'    => array(1, -1, 100,  '%',  'Luftfeuchte am Maeher',
+        'MESSERWARN' => array(0, 0, 1,    '',    '1 = Messerwechsel fällig'),
+        'TEMP'       => array(1, -999, 80, 'GradC','Temperatur am Mäher',
+                              '-999 = nicht bekannt; -1 wäre hier ein gültiger Messwert'),
+        'FEUCHTE'    => array(1, -1, 100,  '%',  'Luftfeuchte am Mäher',
                               '-1 = nicht bekannt'),
-        'WLAN'       => array(1, -999, 0, 'dBm', 'WLAN-Signalstaerke',
-                              '-999 = nicht bekannt; 0 waere hier das beste Signal'),
+        'WLAN'       => array(1, -999, 0, 'dBm', 'WLAN-Signalstärke',
+                              '-999 = nicht bekannt; 0 wäre hier das beste Signal'),
         'TIMER'      => array(0, 0, 1,    '',    '1 = Timer aktiv'),
         'ANN'        => array(0, 0, 1,    '',    'Meldefenster aktiv'),
         'AUDIO'      => array(0, 0, 1,    '',    'Ansage freigegeben'),
         'PUSH'       => array(0, 0, 1,    '',    'Push freigegeben'),
-        'PTEST'      => array(0, 0, 1,    '',    'Test-Push ausloesen'),
+        'PTEST'      => array(0, 0, 1,    '',    'Test-Push auslösen'),
         // --- ab 1.1.0, hinten angehaengt ---
         'TS'          => array(1, 0, 2000000000, 's', 'Zeitstempel des letzten Cron-Laufs',
                                'Unix-Sekunden. Alter = (Loxone-Zeit + 1230768000) - TS'),
-        'ZAEHLER'     => array(1, 0, 999,  '',   'Laufzaehler 0...999',
-                               'laeuft um; steht er still, laeuft der Cron nicht mehr'),
+        'ZAEHLER'     => array(1, 0, 999,  '',   'Laufzähler 0...999',
+                               'läuft um; steht er still, läuft der Cron nicht mehr'),
         'FEHLERALTER' => array(1, -1, 100000, 'h', 'Stunden seit dem letzten Fehler',
                                '-1 = keiner bekannt'),
     );
@@ -1672,7 +2082,14 @@ function mo_xml_virtual_in_http($kopf, $cmds) {
         $o .= 'Comment="' . mo_x($c['comment']) . '" ';
         $o .= 'Check="' . mo_x($c['check']) . '" ';
         $o .= 'Signed="' . ($c['min'] < 0 ? 'true' : 'false') . '" ';
-        $o .= 'Analog="' . ($c['analog'] ? 'true' : 'false') . '" ';
+        /* A23 (06.09.2026): bis 1.1.5 stand hier bei digitalen Eingaengen
+         * Analog="false" - neunmal in der erzeugten Datei, waehrend die
+         * massgebliche Ausfuhr aus Loxone Config (VI_Rasenmaeher
+         * (LoxBerry-Plugin)_Test.xml, 12.08.2026) das Attribut bei digitalen
+         * Werten FORTLAESST. Regeln/07: Analog="false" gehoert an
+         * VirtualOutCmd, nicht an VirtualInHttpCmd. Weggelassen statt
+         * verneint - das ist, was Config selbst schreibt. */
+        if ($c['analog']) { $o .= 'Analog="true" '; }
         $o .= 'SourceValLow="0" DestValLow="0" SourceValHigh="1" DestValHigh="1" DefVal="0" ';
         $o .= 'MinVal="' . (int) $c['min'] . '" ';
         $o .= 'MaxVal="' . (int) $c['max'] . '" ';
@@ -1767,6 +2184,19 @@ function mo_abo_text() {
          . sprintf(mo_t('TEXT.ABO_GEMESSEN'), $f) . '</span>';
 }
 
+/**
+ * Der Abfragezyklus des virtuellen Eingangs, in Sekunden - EINE Stelle.
+ *
+ * A21 (06.09.2026, gemessen): die erzeugte Vorlage trug PollingTime="60",
+ * waehrend drei Stellen der Sprachdatei "30 Sekunden" sagten. Wer
+ * importierte, bekam 60; wer die Tabelle abschrieb, trug 30 ein.
+ *
+ * 60 ist die richtige Zahl: der Cron misst im Minutentakt, ein zweiter
+ * Abruf dazwischen liefert denselben zwischengespeicherten Wert. Die
+ * Reitertexte holen die Zahl jetzt hier ab.
+ */
+function mo_polling() { return 60; }
+
 /** Vorlage fuer den Import in Loxone Config. Rueckgabe: array(name, inhalt) */
 function mo_vorlage($dev = 1) {
     $host = isset($_SERVER['HTTP_HOST']) && $_SERVER['HTTP_HOST'] !== ''
@@ -1786,11 +2216,20 @@ function mo_vorlage($dev = 1) {
         );
     }
     return array('VI_robonect' . ($dev > 1 ? '_' . $dev : '') . '.xml', mo_xml_virtual_in_http(array(
+        /* A19 (06.09.2026, gemessen): in 1.1.5 wurde dieser Titel von
+         * 'Rasenmaeher' auf 'Rasenmäher' geaendert - im selben Zug, in dem
+         * der Kommentar in mo_vo_vorlage() zusichert, die TITEL blieben
+         * unveraendert. Der Wurzeltitel ist der GERAETENAME in Loxone
+         * Config; wer die Vorlage neu einliest, bekaeme ein zweites Geraet
+         * neben dem bestehenden, und die beiden Vorlagen derselben Linie
+         * schrieben den Namen verschieden. Zurueck auf den Stand von
+         * 1.1.4. Der Comment darunter traegt die Umlaute - er ist beim
+         * erneuten Import harmlos. */
         'title' => 'Rasenmaeher' . ($dev > 1 ? ' ' . $dev : ''),
         'address' => 'http://' . $host . '/plugins/' . $ordner . '/mower.php' . ($dev > 1 ? '?dev=' . $dev : ''),
-        'polling' => '60',
-        'comment' => 'Erzeugt vom LoxBerry-Plugin Rasenmaeher/Robonect (' . date('d.m.Y') . '). '
-                   . 'Loxone Config legt beim Import neu an und ueberschreibt nichts - '
+        'polling' => (string) mo_polling(),
+        'comment' => 'Erzeugt vom LoxBerry-Plugin Rasenmäher/Robonect (' . date('d.m.Y') . '). '
+                   . 'Loxone Config legt beim Import neu an und überschreibt nichts - '
                    . 'zweimal eingelesen ergibt doppelte Bausteine.',
     ), $cmds));
 }
@@ -1805,17 +2244,29 @@ function mo_vo_vorlage() {
     $tok = isset($cfg['aktionstoken']) ? (string) $cfg['aktionstoken'] : '';
     $crlf = "\r\n";
     $o = '<?xml version="1.0" encoding="utf-8"?>' . $crlf;
-    $o .= '<VirtualOut HintText="" Title="Rasenmaeher steuern (LoxBerry-Plugin)" Comment="Steuerbefehle ueber das Plugin ' . mo_x($ordner) . ' - enthaelt das Aktionstoken." Address="http://' . mo_x($host) . '" CmdInit="" CloseAfterSend="true" CmdSep="">' . $crlf;
+    $o .= '<VirtualOut HintText="" Title="Rasenmaeher steuern (LoxBerry-Plugin)" Comment="Steuerbefehle über das Plugin ' . mo_x($ordner) . ' - enthält das Aktionstoken. Loxone Config legt beim Import neu an und überschreibt nichts." Address="http://' . mo_x($host) . '" CmdInit="" CloseAfterSend="true" CmdSep="">' . $crlf;
     $o .= "\t" . '<Info templateType="3" minVersion="17010727"/>' . $crlf;
+    /* Spalte 4 ist der ANZEIGENAME in Loxone Config (Regeln/07): bis 1.1.4
+     * stand dort "", und Config zeigte den Titel. Der Vorsatz nennt das
+     * Geraet, weil die Bausteinsuche des Miniservers den Geraeteknoten nicht
+     * kennt - "Automatik" gibt es auch im Batterie-Plugin. Die TITEL bleiben
+     * unveraendert: ein geaenderter Titel legt beim erneuten Import neue
+     * Ausgaenge NEBEN die alten. */
     foreach (array(
-        array('Maeher starten', '/mower.php?cmd=start', false),
-        array('Maeher stoppen', '/mower.php?cmd=stop', false),
-        array('Automatik', '/mower.php?cmd=auto', false),
-        array('Zur Ladestation', '/mower.php?cmd=home', false),
-        array('Ende des Tages', '/mower.php?cmd=eod', false),
-        array('Messerwechsel quittieren', '/mower.php?cmd=blade_reset', false),
+        array('Maeher starten', '/mower.php?cmd=start', false, 'Mäher: starten'),
+        array('Maeher stoppen', '/mower.php?cmd=stop', false, 'Mäher: stoppen'),
+        array('Automatik', '/mower.php?cmd=auto', false, 'Mäher: Automatik'),
+        array('Zur Ladestation', '/mower.php?cmd=home', false, 'Mäher: zur Ladestation'),
+        array('Ende des Tages', '/mower.php?cmd=eod', false, 'Mäher: Ende des Tages'),
+        array('Messerwechsel quittieren', '/mower.php?cmd=blade_reset', false, 'Mäher: Messerwechsel quittieren'),
+        /* A20 (06.09.2026, gemessen): der Reiter "Einbindung in Loxone"
+         * fuehrt sieben Steuerbefehle, die Vorlage trug sechs - 'man'
+         * fehlte, obwohl mo_command() ihn kennt. HINTEN angehaengt: die
+         * sechs bestehenden Titel und Adressen bleiben unberuehrt, ein
+         * erneuter Import legt keine Bausteine neben die alten. */
+        array('Handbetrieb', '/mower.php?cmd=man', false, 'Mäher: Handbetrieb'),
     ) as $c) {
-        $o .= "\t" . '<VirtualOutCmd Title="' . mo_x($c[0]) . '" Comment="" CmdOnMethod="GET" CmdOffMethod="GET" ';
+        $o .= "\t" . '<VirtualOutCmd Title="' . mo_x($c[0]) . '" Comment="' . mo_x($c[3]) . '" CmdOnMethod="GET" CmdOffMethod="GET" ';
         $o .= 'CmdOn="' . mo_x('/plugins/' . $ordner . $c[1] . '&token=' . $tok) . '" ';
         $o .= 'CmdOnHTTP="" CmdOnPost="" CmdOff="" CmdOffHTTP="" CmdOffPost="" CmdAnswer="" ';
         $o .= 'Analog="' . (!empty($c[2]) ? 'true' : 'false') . '" Repeat="0" RepeatRate="0" HintText=""/>' . $crlf;
@@ -2161,6 +2612,33 @@ function mo_sicherung_lesen($roh)
     if ($anzahl === 0 && !$mangel) {
         $mangel[] = mo_t('TEXT.SICH_LEER');
     }
+    /* FEHLENDE Schluessel sind eine Beanstandung, kein stiller Rueckfall.
+     *
+     * Bis hierher war die Vorgabenliste der Ausgangspunkt, und nur was in
+     * der Datei stand wurde darueber geschrieben. Eine Datei mit einem
+     * einzigen Schluessel lief damit ohne Beanstandung durch, wurde
+     * gespeichert, und alle uebrigen Einstellungen fielen auf Werk
+     * zurueck - quittiert mit "1 Wert uebernommen".
+     *
+     * Gemessen an VolkswagenID 0.9.11 am 03.09.2026 unter PHP 7.4 und 8.4:
+     * dort fiel dabei auch das Aktionstoken auf '', und jede im Miniserver
+     * eingetragene Adresse war stumm ungueltig. Am 07.09.2026 ueber den
+     * Bestand ausgerollt (30 Linien).
+     *
+     * Der Hausstandard sagt: eine halb gueltige Datei aendert gar nichts.
+     * Verglichen wird gegen die VORGABEN, nicht gegen $bekannt: was
+     * ausserhalb der Konfigurationsdatei liegt - Zugangsdaten in einer
+     * eigenen Datei - faellt nicht auf Werk zurueck und darf hier fehlen. */
+    $fehlend = array();
+    foreach (array_keys(mo_vorgaben()) as $fk) {
+        if (!array_key_exists($fk, $daten)) {
+            $fehlend[] = $fk;
+        }
+    }
+    if ($fehlend) {
+        $mangel[] = sprintf(mo_t('TEXT.SICH_FEHLEND'), count($fehlend),
+            htmlspecialchars(implode(', ', $fehlend), ENT_QUOTES, 'UTF-8'));
+    }
     return array($mangel ? null : $neu, $mangel, $anzahl);
 }
 
@@ -2447,12 +2925,122 @@ function mo_themen()
 }
 
 /**
+ * Setzen Leiste UND Bereiche das sm-active serverseitig?
+ *
+ * Regeln/04: die zusammengesetzte CSS-Klasse ist richtig - sie macht aber
+ * hausstandard_pruefen.py blind ("zusammengesetzte CSS-Klasse (nicht
+ * pruefbar)"), und ein "nicht pruefbar" liest sich beim Ueberfliegen wie
+ * ein Haken. Wer eine Pruefung blind macht, ERSETZT sie.
+ *
+ * Abweichung von der Hausvorlage: die schreibt "sm-tab<\?=", diese Linie
+ * benutzt "<?php echo". Das Muster deckt deshalb beide Schreibweisen ab.
+ */
+function mo_smactive_probe($datei)
+{
+    $s = (string) @file_get_contents($datei);
+    if ($s === '') {
+        return array(2, sprintf(mo_t('TEXT.PRUEF_DATEI_LEER'), basename($datei)));
+    }
+    $anzahl   = preg_match_all('/data-ziel="tab-[a-z0-9]+"/', $s);
+    $leiste   = preg_match_all('/class="sm-tab<\?[^>]*sm-active/', $s);
+    $bereiche = preg_match_all('/class="sm-seite<\?[^>]*sm-active/', $s);
+    if ($anzahl > 0 && $leiste >= $anzahl && $bereiche >= $anzahl) {
+        return array(1, sprintf(mo_t('TEXT.PRUEF_SMACTIVE_JA'), $anzahl));
+    }
+    return array(0, sprintf(mo_t('TEXT.PRUEF_SMACTIVE_NEIN'), $leiste, $bereiche, $anzahl));
+}
+
+/**
+ * Traegt JEDES gesendete Thema eine Retain-Entscheidung?
+ *
+ * A4: die Entscheidung steht in mo_mqtt_zustaende() und
+ * mo_mqtt_messwerte(). Ein Feld, das jemand ergaenzt und in keiner der
+ * beiden Listen eintraegt, ginge stillschweigend fluechtig hinaus - genau
+ * die Sorte Luecke, wegen der die Linie bis 1.1.5 gar nichts
+ * zurueckbehalten hat.
+ */
+function mo_retainprobe()
+{
+    $th = mo_themen();
+    $alle = array_merge($th['maeher'], $th['anlage']);
+    if (!$alle) { return array(0, mo_t('TEXT.PRUEF_RETAIN_LEER')); }
+    $ohne = array();
+    $ret = 0;
+    foreach ($alle as $t) {
+        if (!mo_mqtt_entschieden($t)) { $ohne[] = $t; continue; }
+        if (mo_mqtt_retain($t)) { $ret++; }
+    }
+    if ($ohne) {
+        return array(0, sprintf(mo_t('TEXT.PRUEF_RETAIN_NEIN'), implode(', ', $ohne)));
+    }
+    return array(1, sprintf(mo_t('TEXT.PRUEF_RETAIN_JA'), count($alle), $ret));
+}
+
+/**
  * Die vollstaendige Selbstpruefung.
  *
  * $datei ist die index.php der Oberflaeche; die Zeilen, die die eigene Datei
  * lesen, brauchen sie. $reiter ist die Reiterliste zur Laufzeit - sie ein
  * zweites Mal aus dem Quelltext zu lesen waere eine zweite Wahrheit.
  */
+/**
+ * Traegt die Aenderungssignatur jeden Wert, der ueber MQTT hinausgeht?
+ *
+ * Gemessen wird das VERHALTEN, nicht eine Liste - eine Liste im Quelltext
+ * waere keine Pruefung. Zwei Faelle, beide Richtungen:
+ *
+ *   gleicher Zustand, anderer Wortlaut  -> dieselbe Signatur
+ *       (sonst ginge der volle Satz jede Minute hinaus)
+ *   andere Klasse, gleiche Zahlen       -> andere Signatur
+ *       (sonst bliebe ein echter Wechsel liegen; genau der Fall, den
+ *        1.1.7 nicht bemerkte)
+ *
+ * Der zweite Fall unterscheidet sich vom ersten in KEINEM Zahlenfeld -
+ * nur im Grund. Er faellt deshalb ohne mo_mqtt_status() in der Signatur
+ * durch, und das ist der Sinn dieser Zeile.
+ */
+function mo_signaturprobe()
+{
+    $grund = array('ok' => 0, 'name' => '-', 'code' => -1, 'modus' => -1,
+                   'modus_text' => '-', 'batterie' => -1, 'laedt' => 0,
+                   'fehler' => 0, 'fehlertext' => '', 'stunden' => 0,
+                   'dauer' => 0, 'messer_rest' => -1, 'messer_warn' => 0,
+                   'temperatur' => -999, 'feuchte' => -1, 'wlan' => -999,
+                   'timer' => 0, 'maeht' => 0, 'ts' => time(), 'grundtext' => '');
+    /* array_merge und nicht '+': beim '+' behielte die linke Seite ihre
+     * Schluessel, und die drei Faelle waeren identisch. */
+    $a = array_merge($grund, array('grund' => 'keine_antwort',
+        'text' => 'Connection timed out after 3003 milliseconds'));
+    $b = array_merge($grund, array('grund' => 'stumm',
+        'text' => 'antwortet gerade nicht'));
+    $d = array_merge($grund, array('grund' => 'anmeldung',
+        'text' => 'Benutzer oder Passwort stimmen nicht (HTTP 401)'));
+
+    $qa = mo_mqtt_signatur_quelle(1, $a);
+    $qb = mo_mqtt_signatur_quelle(1, $b);
+    if (!$qa || !$qb) { return array(2, mo_t('TEXT.PRUEF_SIGNATUR_LEER')); }
+
+    $unterschied = array();
+    foreach ($qa as $k => $v) {
+        if (!array_key_exists($k, $qb) || $qb[$k] !== $v) { $unterschied[] = $k; }
+    }
+    if ($unterschied) {
+        if (in_array('STATUSTEXT', $unterschied, true)) {
+            return array(0, sprintf(mo_t('TEXT.PRUEF_SIGNATUR_LAUT'),
+                                    implode(', ', $unterschied)));
+        }
+        /* Zwischen den zwei Aufrufen hat sich etwas anderes bewegt - der
+         * Fehleralter zaehlt in Sekunden. Das ist kein Befund, aber auch
+         * keine Messung. */
+        return array(2, sprintf(mo_t('TEXT.PRUEF_SIGNATUR_UNKLAR'),
+                                implode(', ', $unterschied)));
+    }
+    if (mo_mqtt_signatur(1, $d) === mo_mqtt_signatur(1, $a)) {
+        return array(0, mo_t('TEXT.PRUEF_SIGNATUR_STUMPF'));
+    }
+    return array(1, sprintf(mo_t('TEXT.PRUEF_SIGNATUR_JA'), count($qa)));
+}
+
 function mo_selbsttest($datei, array $reiter)
 {
     $cfg = mo_config($zustand);
@@ -2551,6 +3139,9 @@ function mo_selbsttest($datei, array $reiter)
     list($ok, $txt) = mo_formularprobe($datei);          $add('PRUEF.FORMULARE', $ok, $txt);
     list($ok, $txt) = mo_downloadprobe($datei);          $add('PRUEF.DOWNLOAD', $ok, $txt);
     list($ok, $txt) = mo_vorlagenprobe();                $add('PRUEF.VORLAGEN', $ok, $txt);
+    list($ok, $txt) = mo_smactive_probe($datei);         $add('PRUEF.SMACTIVE', $ok, $txt);
+    list($ok, $txt) = mo_retainprobe();                  $add('PRUEF.RETAIN', $ok, $txt);
+    list($ok, $txt) = mo_signaturprobe();                $add('PRUEF.SIGNATUR', $ok, $txt);
 
     return $z;
 }

@@ -155,13 +155,21 @@ if ($mw_ist_post) {
 
 /* ================= 4. Reiterwahl ================= */
 /*
- * Diese Liste, die Positivliste in $mw_muster und die id der Flaechen muessen
- * deckungsgleich bleiben - alle drei. Sie stehen ausgeschrieben, weil
- * hausstandard_pruefen.py sie als LITERAL sucht: eine Schleife macht das
- * Werkzeug blind und meldet dann "0 Reiter", was beim Ueberfliegen wie ein
- * Haken aussieht. Dass sie auseinanderlaufen KOENNEN, ist der Preis; dagegen
- * steht keine Hoffnung, sondern die Pruefzeile mo_reiterprobe() im Reiter
- * Test, die alle drei Stellen gegeneinander haelt.
+ * Diese Liste und die id der Flaechen muessen deckungsgleich bleiben. Sie
+ * stehen ausgeschrieben, weil hausstandard_pruefen.py sie als LITERAL sucht:
+ * eine Schleife macht das Werkzeug blind und meldet dann "0 Reiter", was
+ * beim Ueberfliegen wie ein Haken aussieht.
+ *
+ * A11 (06.09.2026, gemessen): hier stand, die Pruefzeile mo_reiterprobe()
+ * halte "alle drei Stellen gegeneinander". Sie liest aber nur zwei - die
+ * Leiste (data-ziel) und die Bereiche (id). Die Positivliste $mw_muster war
+ * ihr unbekannt. Rueckbau an einer Kopie: nimmt man tab-log aus dem
+ * Ausdruck, wird der Reiter unerreichbar (?form=log oeffnet tab-settings) -
+ * und die Zeile meldet unveraendert "ja, alle 5 Reiter".
+ *
+ * Die dritte Stelle gibt es jetzt nicht mehr: der Ausdruck wird AUS dieser
+ * Liste gebaut. Auseinanderlaufen kann damit nur noch, was die Pruefzeile
+ * wirklich misst - und der Satz oben stimmt wieder.
  */
 $mw_reiter = array(
     'tab-settings' => mo_t('REITER.EINSTELLUNGEN'),
@@ -170,7 +178,8 @@ $mw_reiter = array(
     'tab-test'     => mo_t('REITER.TEST'),
     'tab-log'      => mo_t('REITER.LOG'),
 );
-$mw_muster = '/^tab-(settings|mqtt|loxone|test|log)$/';
+$mw_muster = '/^(' . implode('|', array_map(
+    'preg_quote', array_keys($mw_reiter))) . ')$/';
 $mw_wunsch = isset($_POST['activetab']) ? (string) $_POST['activetab']
     : (isset($_GET['form']) ? 'tab-' . (string) $_GET['form'] : '');
 $mw_tab = preg_match($mw_muster, $mw_wunsch) ? $mw_wunsch : 'tab-settings';
@@ -291,10 +300,12 @@ if ($mw_ist_post && isset($_POST['mqtt_save'])) {
     list($mw_wert, $mw_m) = mo_wert_pruefen('mqtt_topic',
         isset($_POST['mqtt_topic']) ? $_POST['mqtt_topic'] : 'maeher');
     if ($mw_m !== '') { $mw_fehler[] = $mw_m; } else { $mw_neu['mqtt_topic'] = $mw_wert; }
-    if (!$mw_fehler) {
-        if (mo_config_speichern($mw_neu)) { $mw_cfg = mo_config(); $mw_saved = true; }
-        else { $mw_fehler[] = sprintf(mo_t('TEXT.FEHLER_SCHREIBEN'), mw_e($mw_cfgfile)); }
-    }
+    /* A14: gespeichert wird auch dann, wenn etwas beanstandet wurde -
+     * $mw_neu ist eine Fortschreibung von $mw_cfg, ein beanstandetes Feld
+     * hat oben keine Zuweisung bekommen und traegt deshalb weiter seinen
+     * bisherigen Wert. Siehe den Speicher-Handler der Einstellungen. */
+    if (mo_config_speichern($mw_neu)) { $mw_cfg = mo_config(); $mw_saved = true; }
+    else { $mw_fehler[] = sprintf(mo_t('TEXT.FEHLER_SCHREIBEN'), mw_e($mw_cfgfile)); }
     $mw_tab = 'tab-mqtt';
 }
 
@@ -338,6 +349,11 @@ if ($mw_ist_post && isset($_POST['save'])) {
              * stillschweigend weg - die gab es ja nie. */
             if (isset($mw_alt[$mw_i]) && is_array($mw_alt[$mw_i])) {
                 $mw_fehler[] = sprintf(mo_t('TEXT.MAEHER_ADRESSE_LEER'), $mw_i + 1);
+                /* A14 (06.09.2026): die Zeile wird UNVERAENDERT uebernommen.
+                 * Bis 1.1.5 fiel sie hier heraus und das Speichern brach
+                 * ganz ab - wer nebenbei etwas anderes geaendert hatte,
+                 * verlor auch das. Melden ist richtig, blockieren nicht. */
+                $mw_liste[] = $mw_alt[$mw_i];
             }
             continue;
         }
@@ -385,13 +401,33 @@ if ($mw_ist_post && isset($_POST['save'])) {
     ));
     if ($mw_m !== '') { $mw_fehler[] = $mw_m; } else { $mw_neu['tts'] = $mw_wert; }
 
-    if (!$mw_fehler) {
-        if (mo_config_speichern($mw_neu)) {
-            $mw_cfg = mo_config();
-            $mw_saved = true;
-        } else {
-            $mw_fehler[] = sprintf(mo_t('TEXT.FEHLER_SCHREIBEN'), mw_e($mw_cfgfile));
-        }
+    /* ==============================================================
+     * A14 (06.09.2026, gemessen) - melden ist richtig, blockieren nicht
+     * ==============================================================
+     *
+     * Bis 1.1.5 stand hier "if (!$mw_fehler)". Eine einzige Beanstandung -
+     * etwa eine versehentlich geleerte Maeheradresse - verhinderte damit
+     * das Speichern ALLER uebrigen Felder, und weil das Formular danach
+     * aus $mw_cfg gefuellt wird, waren die Eingaben auch von der Seite
+     * fort. Der Anwender aenderte drei Dinge, bekam EINE Meldung ueber die
+     * Adresse und verlor die beiden anderen Aenderungen unbemerkt.
+     *
+     * Warum es jetzt sicher ist, trotzdem zu schreiben: $mw_neu ist eine
+     * Fortschreibung von $mw_cfg (Zeile "$mw_neu = $mw_cfg;"). Jede Pruefung
+     * oben hat die Form "beanstandet -> keine Zuweisung, sonst zuweisen".
+     * Ein beanstandetes Feld traegt in $mw_neu also seinen BISHERIGEN Wert;
+     * gespeichert wird nichts Ungeprueftes. Die Beanstandung erscheint
+     * trotzdem, und die Meldung sagt, dass nicht alles uebernommen wurde.
+     *
+     * Fuer die zurueckgespielte Sicherungsdatei gilt weiterhin das
+     * Gegenteil: dort aendert eine halb gueltige Datei GAR NICHTS
+     * (mo_sicherung_lesen()). Eine Datei ist ein Ganzes, ein Formular nicht.
+     * ============================================================== */
+    if (mo_config_speichern($mw_neu)) {
+        $mw_cfg = mo_config();
+        $mw_saved = true;
+    } else {
+        $mw_fehler[] = sprintf(mo_t('TEXT.FEHLER_SCHREIBEN'), mw_e($mw_cfgfile));
     }
     $mw_tab = 'tab-settings';
 }
@@ -449,8 +485,10 @@ $mw_host = mw_e(isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : '<loxberr
 .sm-info { background: #e3f2fd; border: 1px solid #90caf9; font-size: 0.9em; }
 .sm-mono { font-family: Consolas, "Courier New", monospace; background: #f0f0f0;
     padding: 1px 4px; border-radius: 3px; font-size: 0.94em; word-break: break-all; }
-.sm-pre { background: #f4f4f4; border: 1px solid #ccc; padding: 10px; font-size: 0.85em;
-    overflow: auto; margin: 8px 0; }
+/* A30d (06.09.2026): hier stand .sm-pre - im gerenderten HTML nirgends
+   benutzt, in beide Richtungen gezaehlt. Entfernt. .sm-warn eine Zeile
+   hoeher war ebenfalls tot und wird seit A14 fuer die Meldung "nicht alles
+   uebernommen" gebraucht; sie bleibt. */
 .sm-small { font-size: 0.82em; color: #666; margin-top: 3px; }
 /* Hinweis und Warnung. Beide gehoeren dazu, und sie heissen SO.
    In 1.0.13 fehlte .sm-warnung als EINZIGE Klasse - ausgerechnet an dem
@@ -521,7 +559,7 @@ $mw_host = mw_e(isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : '<loxberr
 </style>
 <div class="sm-wrap">
 
-<?php if ($mw_saved) { ?><div class="sm-alert sm-ok"><b><?php echo mw_e(mo_t('TEXT.KONFIGURATION_GESPEICHERT')); ?></b> <?php echo mw_e(mo_t('TEXT.ZUGANGSDATEN_MIT_DATEIRECHTEN_0600')); ?></div><?php } ?>
+<?php if ($mw_saved && $mw_fehler) { ?><div class="sm-alert sm-warn"><b><?php echo mw_e(mo_t('TEXT.TEILWEISE_GESPEICHERT')); ?></b> <?php echo mw_e(mo_t('TEXT.TEILWEISE_GESPEICHERT_TEXT')); ?></div><?php } elseif ($mw_saved) { ?><div class="sm-alert sm-ok"><b><?php echo mw_e(mo_t('TEXT.KONFIGURATION_GESPEICHERT')); ?></b> <?php echo mw_e(mo_t('TEXT.ZUGANGSDATEN_MIT_DATEIRECHTEN_0600')); ?></div><?php } ?>
 <?php if ($mw_note !== '') { ?><div class="sm-alert sm-ok"><?php echo $mw_note; ?></div><?php } ?>
 <?php if ($mw_fehler) { ?>
 <div class="sm-alert sm-err"><b><?php echo mw_e(mo_t('TEXT.FEHLER_4')); ?></b>
@@ -582,7 +620,7 @@ $mw_host = mw_e(isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : '<loxberr
 <h2><?php echo sprintf(mw_e(mo_t('TEXT.H_MAEHER')), mo_max_maeher()); ?></h2>
 <div class="sm-breit">
 <table class="sm-tbl">
-<tr><th style="width:36px;">Nr.</th><th style="width:24%;"><?php echo mw_e(mo_t('TEXT.NAME_FREI')); ?></th><th><?php echo mw_e(mo_t('TEXT.ADRESSE')); ?></th><th style="width:18%;"><?php echo mw_e(mo_t('TEXT.BENUTZER')); ?></th><th style="width:20%;"><?php echo mw_e(mo_t('TEXT.PASSWORT')); ?></th><th style="width:110px;"><?php echo mw_e(mo_t('TEXT.MESSER_IV_KURZ')); ?></th><th style="width:110px;"><?php echo mw_e(mo_t('TEXT.MESSER_NP_KURZ')); ?></th><th style="width:70px;"><?php echo mw_e(mo_t('TEXT.LOESCHEN')); ?></th></tr>
+<tr><th style="width:36px;"><?php echo mw_e(mo_t('TEXT.NR')); ?></th><th style="width:24%;"><?php echo mw_e(mo_t('TEXT.NAME_FREI')); ?></th><th><?php echo mw_e(mo_t('TEXT.ADRESSE')); ?></th><th style="width:18%;"><?php echo mw_e(mo_t('TEXT.BENUTZER')); ?></th><th style="width:20%;"><?php echo mw_e(mo_t('TEXT.PASSWORT')); ?></th><th style="width:110px;"><?php echo mw_e(mo_t('TEXT.MESSER_IV_KURZ')); ?></th><th style="width:110px;"><?php echo mw_e(mo_t('TEXT.MESSER_NP_KURZ')); ?></th><th style="width:70px;"><?php echo mw_e(mo_t('TEXT.LOESCHEN')); ?></th></tr>
 <?php
 /* Vorhandene Zeilen plus EINE leere zum Anlegen - hoechstens mo_max_maeher().
    Der Index steht ausgeschrieben, siehe die Begruendung am Speicher-Handler. */
@@ -615,7 +653,7 @@ for ($mw_i = 0; $mw_i < $mw_anz; $mw_i++) {
     <div>
         <label><?php echo mw_e(mo_t('TEXT.STATUS_CACHE_SEKUNDEN')); ?></label>
         <input data-role="none" type="number" name="cache_sec" value="<?php echo (int) $mw_cfg['cache_sec']; ?>" min="5" max="300">
-        <div class="sm-small"><?php echo mw_e(mo_t('TEXT.EMPFEHLUNG_20_EINE_LOXONE_ABFRAGE_')); ?></div>
+        <div class="sm-small"><?php echo mw_e(sprintf(mo_t('TEXT.EMPFEHLUNG_20_EINE_LOXONE_ABFRAGE_'), mo_polling())); ?></div>
     </div>
     <div>
         <label><?php echo mw_e(mo_t('TEXT.MESSERWECHSEL_INTERVALL_BETRIEBSST')); ?></label>
@@ -850,13 +888,21 @@ foreach ($mw_themen['maeher'] as $mw_th) {
 <!-- ================= Einbindung in Loxone ================= -->
 <div class="sm-seite<?php echo $mw_tab === 'tab-loxone' ? ' sm-active' : ''; ?>" id="tab-loxone">
 <h2><?php echo mw_e(mo_t('TEXT.EINBINDUNG_IN_LOXONE_SCHRITT_FR_SC')); ?></h2>
+<?php /* A30b (06.09.2026): hier standen ZWEI Legenden im selben Reiter, jede
+       * unvollstaendig - eine beim Token (nur Aktion), eine bei der Vorlage
+       * (nur Technik). Die uebrigen vier Reiter fuehren je eine. Jetzt eine
+       * gesammelte, oben, mit beiden Punkten. */ ?>
+<div class="sm-legende">
+<span><i class="sm-punkt sm-b-technik"></i> <?php echo mw_e(mo_t('LEGENDE.TECHNIK')); ?></span>
+<span><i class="sm-punkt sm-b-aktion"></i> <?php echo mw_e(mo_t('LEGENDE.AKTION')); ?></span>
+</div>
 <p><?php echo mo_t('TEXT.DER_MINISERVER_FRAGT'); ?> <b><?php echo mw_e(mo_t('TEXT.EINE')); ?></b> <?php echo mo_t('TEXT.ADRESSE_OHNE_ZUGANGSDATEN_AB_UND_B'); ?></p>
 
-<div class="sm-step"><b><?php echo mw_e(mo_t('TEXT.SCHRITT_1_VIRTUELLER_HTTP_EINGANG_')); ?></b> <?php echo mw_e(mo_t('TEXT.ABFRAGE_ALLE_30_S')); ?>
+<div class="sm-step"><b><?php echo mw_e(mo_t('TEXT.SCHRITT_1_VIRTUELLER_HTTP_EINGANG_')); ?></b> <?php echo mw_e(sprintf(mo_t('TEXT.ABFRAGE_ALLE_S'), mo_polling())); ?>
 <table class="sm-tbl">
 <tr><th><?php echo mw_e(mo_t('TEXT.EIGENSCHAFT')); ?></th><th><?php echo mw_e(mo_t('TEXT.WERT')); ?></th></tr>
 <tr><td>URL</td><td><span class="sm-mono">http://<?php echo $mw_host; ?>/plugins/<?php echo mw_e($mw_plugin); ?>/mower.php</span> <?php echo mw_e(mo_t('TEXT.MHER_2')); ?> <span class="sm-mono">?dev=2</span>)</td></tr>
-<tr><td><?php echo mw_e(mo_t('TEXT.ABFRAGEZYKLUS')); ?></td><td><?php echo mw_e(mo_t('TEXT.30_SEKUNDEN')); ?></td></tr>
+<tr><td><?php echo mw_e(mo_t('TEXT.ABFRAGEZYKLUS')); ?></td><td><?php echo mw_e(sprintf(mo_t('TEXT.SEKUNDEN_N'), mo_polling())); ?></td></tr>
 </table>
 <span class="sm-small"><?php echo mo_t('TEXT.DER_BISHERIGE_EINGANG_MIT'); ?> <span class="sm-mono">?user=...&amp;pass=...</span> <?php echo mw_e(mo_t('TEXT.KANN_DANACH_GELSCHT_WERDEN')); ?></span>
 </div>
@@ -922,9 +968,6 @@ foreach ($mw_befehle as $mw_b => $mw_bt) { ?>
 <tr><th><?php echo mw_e(mo_t('TEXT.EIGENSCHAFT')); ?></th><th><?php echo mw_e(mo_t('TEXT.WERT')); ?></th></tr>
 <tr><td><?php echo mw_e(mo_t('TEXT.AKTUELLES_TOKEN')); ?></td><td><span class="sm-mono"><?php echo mw_e($mw_cfg['aktionstoken']); ?></span></td></tr>
 </table>
-<div class="sm-legende">
-<span><i class="sm-punkt sm-b-aktion"></i> <?php echo mw_e(mo_t('LEGENDE.AKTION')); ?></span>
-</div>
 <div class="sm-knopfreihe">
   <form method="post" action="index.php">
     <?php echo mo_fmt_feld(); ?>
@@ -940,9 +983,6 @@ foreach ($mw_befehle as $mw_b => $mw_bt) { ?>
 
 <h2><?php echo mw_e(mo_t('TEXT.H_VORLAGE')); ?></h2>
 <div class="sm-hinweis"><?php echo mo_t('TEXT.H_VORLAGE_TEXT'); ?></div>
-<div class="sm-legende">
-<span><i class="sm-punkt sm-b-technik"></i> <?php echo mw_e(mo_t('LEGENDE.TECHNIK')); ?></span>
-</div>
 <div class="sm-knopfreihe">
 <form action="index.php" method="post">
   <?php echo mo_fmt_feld(); ?>
@@ -993,7 +1033,7 @@ foreach ($mw_befehle as $mw_b => $mw_bt) { ?>
 </div>
 
 <div class="sm-step"><b><?php echo mw_e(mo_t('TEXT.SCHRITT_7_GEGENPROBE')); ?></b><br>
-<?php echo mo_t('TEXT.GEGENPROBE_TEXT'); ?>
+<?php echo mo_t('TEXT.GEGENPROBE_TEXT'); ?><br>
 <span class="sm-mono">http://<?php echo $mw_host; ?>/plugins/<?php echo mw_e($mw_plugin); ?>/mower.php?json=1</span>
 </div>
 </div>
@@ -1031,7 +1071,11 @@ foreach (mo_selbsttest(__FILE__, $mw_reiter) as $mw_z) {
 
 <h3 class="sm-h3"><?php echo mw_e(mo_t('TEXT.TECHNISCHE_AUSKUNFT')); ?></h3>
 <div class="sm-knopfreihe">
-<a data-role="none" class="sm-btn sm-b-technik" href="/plugins/<?php echo mw_e($mw_plugin); ?>/mower.php?debug=1&amp;refresh=1" target="_blank"><?php echo mw_e(mo_t('TEXT.DEBUG')); ?></a>
+<?php /* A31 (06.09.2026, gemessen): dieser Knopf verlinkte ohne Token.
+       * ?debug=1 ist seit 1.1.4 tokenpflichtig, ?refresh=1 seit 1.1.6 - der
+       * Knopf lieferte also DEBUG;OK=0;ERR=TOKEN mit HTTP 403, waehrend
+       * jeder andere Verweis im Reiter das Token traegt. */ ?>
+<a data-role="none" class="sm-btn sm-b-technik" href="/plugins/<?php echo mw_e($mw_plugin); ?>/mower.php?debug=1&amp;refresh=1&amp;token=<?php echo mw_e($mw_cfg['aktionstoken']); ?>" target="_blank"><?php echo mw_e(mo_t('TEXT.DEBUG')); ?></a>
 <a data-role="none" class="sm-btn sm-b-technik" href="/plugins/<?php echo mw_e($mw_plugin); ?>/mower.php?selftest=1&amp;token=<?php echo mw_e($mw_cfg['aktionstoken']); ?>" target="_blank"><?php echo mw_e(mo_t('TEXT.K_SELFTEST')); ?></a>
 </div>
 
@@ -1091,7 +1135,7 @@ foreach (mo_selbsttest(__FILE__, $mw_reiter) as $mw_z) {
 <!-- ================= Logdateien ================= -->
 <div class="sm-seite<?php echo $mw_tab === 'tab-log' ? ' sm-active' : ''; ?>" id="tab-log">
 <h2><?php echo mw_e($mw_reiter['tab-log']); ?></h2>
-<div class="sm-small" style="margin-bottom:8px;"><?php echo mo_t('TEXT.PROTOKOLLIERT_WERDEN_STATUSNDERUNG'); ?><br><?php echo mw_e(mo_t('TEXT.DATEI')); ?> <span class="sm-mono"><?php echo mw_e($mw_logfile); ?></span></div>
+<div class="sm-small" style="margin-bottom:8px;"><?php echo mo_t('TEXT.PROTOKOLLIERT_WERDEN_STATUSNDERUNG'); ?><br><?php echo mo_t('TEXT.LOG_RAMDISK'); ?><br><?php echo mw_e(mo_t('TEXT.DATEI')); ?> <span class="sm-mono"><?php echo mw_e($mw_logfile); ?></span></div>
 <?php if ($mw_loglines) { ?>
 <div class="sm-log"><?php echo mw_e(implode("\n", $mw_loglines)); ?></div>
 <?php } else { ?>

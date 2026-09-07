@@ -12,6 +12,198 @@ Zugangsdaten lokal (Dateirechte 0600, HTTP-Basic-Auth) — Loxone ruft nur noch
 
 Kompatibel mit LoxBerry 3.x und **LoxBerry 4** (reines PHP, PHP 7.4 und 8.x).
 
+## Neu in 1.1.8
+
+Der Statustext geht jetzt in die Änderungssignatur ein — und wird dafür
+vorher stabil.
+
+Das Plugin sendet den vollen Wertsatz nur, wenn sich etwas geändert hat
+(sonst alle 30 Minuten). Woran es „geändert" erkennt, war bis 1.1.7 allein
+die Zahlenliste aus `mo_werte()`. Über MQTT geht aber auch ein Thema
+`<Präfix>/status` mit einem **Text** hinaus, und der stand nicht darin.
+
+**Am Gerät gemessen** (07.09.2026, sechs Minuten am laufenden Broker): der
+Text wechselte im Minutentakt zwischen „antwortet gerade nicht" und
+„Connection timed out after 3002/3003 milliseconds", während die Signatur
+unverändert stand. Das zurückbehaltene `<Präfix>/status` trug damit den
+Wortlaut des letzten **Zahlen**wechsels.
+
+Den Text einfach mit aufzunehmen wäre schlimmer gewesen als der Befund: der
+volle Satz aus 26 Datagrammen ginge dann jede Minute hinaus, nur weil `curl`
+eine andere Millisekundenzahl nennt. Deshalb zwei Schritte in einem:
+
+* Für den MQTT-Weg wird der Text auf seine **Klasse** zurückgeführt. Alles,
+  was „der Mäher antwortet nicht" heißt, sendet denselben Wortlaut.
+* **Erst dann** geht er in die Signatur. Ein echter Wechsel — „parkt" auf
+  „mäht", erreichbar auf nicht erreichbar, Abriss auf falsches Passwort —
+  löst sofort einen Versand aus, die Millisekundenzahl nicht.
+
+Der ausführliche Wortlaut geht nirgends verloren: er steht weiter im
+Protokoll und in der Oberfläche, dort, wo ein Mensch nachsieht, wenn er
+wissen will, **warum** der Mäher schweigt.
+
+Die Antwortzeile für den Miniserver (`MOWER;OK=…;CODE=…`) ist
+**unverändert** — `mo_werte()` wurde nicht angefasst, ein zusätzliches Feld
+dort wäre eine Änderung am Suchtext jeder bestehenden Anlage.
+
+Neu im Reiter *Test*: eine Zeile, die das Verhalten misst statt einer Liste
+im Quelltext — gleicher Zustand mit anderem Wortlaut muss dieselbe Signatur
+ergeben, ein anderer Grund bei gleichen Zahlen eine andere.
+
+## Neu in 1.1.7
+
+Die Feldbeschriftungen tragen jetzt Umlaute.
+
+Spalte 5 der Tabelle in `mo_felder()` wandert als `Comment` in die
+Importvorlage, und Loxone Config macht daraus den **Anzeigenamen der Kachel**.
+Bis 1.1.6 stand dort ASCII-Umschrift — „1 = Maeher erreichbar", „Maehstunden
+gesamt", „WLAN-Signalstaerke". Dieselben Texte erscheinen auch in der
+Oberfläche des Plugins, im Reiter *MQTT* und in der Feldtabelle.
+
+Umgestellt sind **elf** Beschriftungen: die neun, die
+`Werkzeuge/vorlagen_pruefen.py` meldet, und zusätzlich „maeht" und „laedt" —
+die beiden kennt die Wortliste des Werkzeugs nicht, und sie stehenzulassen
+hätte dieselbe Tabelle halb umgestellt zurückgelassen. Dazu vier Erklärungen
+aus Spalte 6, die ausschließlich in der Oberfläche erscheinen.
+
+**Ohne Wirkung auf eine laufende Anlage.** Ein geänderter `Comment` ist beim
+erneuten Import harmlos: Loxone Config legt ohnehin neu an, und der
+Anzeigename hängt nicht am Suchtext. Unverändert bleiben die **Titel**
+(`MOWER_OK`, `MOWER_CODE`, …), die **Suchtexte** und alle **MQTT-Themen** —
+gemessen, 22 von 22 Titeln und 22 von 22 Suchtexten byteweise gleich mit
+1.1.6, ebenso die sieben Titel und Adressen der Steuerbefehle.
+
+**Nicht umgestellt** ist die Einheit `GradC` (`MOWER_TEMP`). Sie geht sowohl
+in den `Comment` als auch in das Attribut `Unit`; ob dort `°C` stehen soll,
+ist eine eigene Entscheidung und keine Fehlerbehebung.
+
+## Neu in 1.1.6
+
+Eine Durchsicht am 06.09.2026 hat dreissig Befunde ergeben, davon keiner neu
+in 1.1.5. Diese Fassung behebt sie. Die wichtigsten in der Reihenfolge ihrer
+Wirkung:
+
+**Der unangemeldete Endpunkt schreibt nicht mehr.** Gemessen: ein Aufruf ohne
+jeden Parameter und ohne Token legte `mower.json` an — 686 Byte, mit Kennwort
+und Aktionstoken, aus der Zweitschrift geheilt. Der Kopfkommentar von
+`mower.php` wies genau das seit 1.1.4 als behoben aus; behoben war es nur für
+die Token-Zweige. `mower.php` legt jetzt als Erstes einen Riegel für den
+ganzen Prozess um (`mo_nur_lesen()`). Dasselbe galt für ein abgewiesenes
+`?cmd=` bei beschädigter Konfiguration: es legte `mower.json.kaputt` an und
+schrieb **je Anfrage** eine Protokollzeile.
+
+**Ein einzelner ausgefallener Abruf verlor einen ganzen Mäheinsatz.** Wurde
+mitten im Mähen einmal nicht gemessen, speicherte `mo_events_check()` den
+Fehlwert `-1` als letzten Zustand; der Einsatz wurde danach nie als beendet
+erkannt, die Statistik zählte ihn nicht, die Meldung „ist fertig" blieb aus —
+und die stehengebliebene Uhr machte die Laufzeit des **nächsten** Einsatzes
+falsch. Gemessen über vier Cron-Läufe, mit Gegenprobe ohne Abriss.
+
+**Zustände gehen jetzt zurückbehalten (retained) hinaus.** Bis 1.1.5 schrieb
+das Plugin ausnahmslos `publish`; am Broker lagen unter `maeher/#` null
+zurückbehaltene Themen. Nach einem Neustart des Miniservers oder des Gateways
+kam damit bis zu 30 Minuten lang an keinem Wert etwas an. Die Entscheidung
+steht je Thema in `mo_mqtt_zustaende()` und `mo_mqtt_messwerte()`; eine neue
+Prüfzeile im Reiter *Test* zählt nach, dass **jedes** gesendete Thema eine
+Entscheidung trägt. Kein Themenname ändert sich.
+
+**Sechs Werte erreichten MQTT höchstens halbstündlich.** `temperatur`,
+`feuchte`, `wlan`, `dauer`, `timer` und `messer_rest` standen nicht in der
+Änderungssignatur des Cron-Laufs. Gemessen: Temperatur 21,5 → 33,3, Feuchte
+48 → 11, WLAN −55 → −88 — über MQTT gingen drei Datagramme hinaus (nur das
+Lebenszeichen), über HTTP im selben Augenblick alle drei Werte. Die Signatur
+entsteht jetzt aus dem vollen Wertsatz.
+
+**`maeher/ts` und `maeher/zaehler` blieben stehen.** Sie kamen mit dem vollen
+Wertsatz und trugen den Stand *vor* dem Fortschreiben des Laufzählers. Die
+Thementabelle verspricht für beide „steht er still, läuft der Cron nicht
+mehr". Sie gehen jetzt bei jedem Durchgang mit dem Lebenszeichen hinaus.
+
+**Fehlende und untaugliche Gerätefelder werden benannt statt zu 0 gebogen.**
+Fehlte `battery`, meldete die Zeile `BATT=0` bei `OK=1` — und 0 heisst in
+Loxone „Akku leer". Kam statt einer Zahl ein Text (`"error_code":"E17"` mit
+`"error_message":"Messer blockiert"`), verschwand die gemeldete Blockade
+vollständig: `FEHLER=0`.
+
+**`?refresh=1` ist tokenpflichtig geworden.** Es übergeht den
+Zwischenspeicher; gemessen kosteten zehn Aufrufe ohne `refresh` null
+Geräteabrufe und zehn mit `refresh` zwanzig. Damit liess sich die Bremse, die
+Mäher und Webserver schützt, ohne Token von jedem Gerät im Netz abschalten.
+
+**`?json=1` gibt ohne Token keine Klartextfelder mehr aus.** `name`, `text`,
+`grundtext` und `fehlertext` trugen Name und **Adresse** des Mähers — genau
+das, wofür `?debug=1` seit 1.1.4 ein Token verlangt. Der Zahlensatz und der
+Block `werte` bleiben offen; Schritt 7 im Reiter *Einbindung in Loxone*
+funktioniert unverändert.
+
+**Eine Beanstandung verhindert das Speichern nicht mehr.** Bis 1.1.5 brach
+eine einzige leere Mäheradresse das Speichern aller übrigen Felder ab, und
+weil das Formular danach aus dem alten Stand gefüllt wird, waren die
+Eingaben auch von der Seite fort. Beanstandete Felder behalten jetzt ihren
+bisherigen Wert, alles Übrige wird gespeichert, und die Meldung sagt das.
+
+**Das Protokoll wächst nicht mehr im Minutentakt.** Bei stummem Mäher
+wechselte der Wortlaut zwischen „Connection timed out" und „antwortet gerade
+nicht"; der Filter „nur bei Änderung" griff deshalb nie. Am Gerät gemessen:
+604 Zeilen, alle vom selben Schlüssel, rund 1,3 je Minute — auf einer
+Ramdisk. Verglichen wird jetzt die Fehlerklasse, und ein Dauerzustand kostet
+höchstens eine Zeile je Stunde. Dasselbe gilt für die Fehlerzeile des
+Cron-Skripts.
+
+**Weiter behoben:** eine fehlerhafte Anfrage wurde mit HTTP 502 statt 400
+beantwortet (die Art des Fehlschlags wurde aus dem Meldungstext geraten); der
+Steuerbefehl `man` fehlte in der Importvorlage; die Vorlage schrieb
+`PollingTime="60"`, während drei Textstellen „30 Sekunden" sagten; bei
+digitalen Eingängen stand `Analog="false"`, das Loxone Config selbst fortlässt;
+der Knopf *Debug* im Reiter *Test* verlinkte ohne Token und antwortete deshalb
+mit HTTP 403; eine Protokollzeile liess sich über `?p=` fälschen; jeder
+erfolgreiche Abruf erzeugte zwei unterdrückte `unlink`-Warnungen; die
+Prüfzeile „Reiter" verglich zwei von drei Stellen, obwohl Beschriftung und
+Kommentar drei zusicherten; `postinstall.sh` meldete bei **jeder**
+Aktualisierung „Konfiguration aus Sicherung wiederhergestellt" und bat, den
+Mäher-Zugang einzutragen; das Deinstallationsskript gab Entwarnung über
+Zugangsdaten, die noch dalagen, rechnete eine Verzeichnisebene zu weit und
+benutzte `<WARNING>` für einen Aufräumhinweis; `preupgrade.sh` legte seine
+Rettung in einen Ordner, den der Installer selbst zurückspielt; dazu eine
+doppelte Maskierung, eine einsprachige Spaltenüberschrift, zwei Legenden in
+einem Reiter und eine verschluckte Leerstelle.
+
+**Ausdrücklich NICHT geändert:** alle Namen, an denen eine laufende Anlage
+hängt — die 22 Titel der Eingänge, die sechs Titel der Steuerbefehle, ihre
+Adressen und sämtliche MQTT-Themen. Der Wurzeltitel der Eingangsvorlage steht
+wieder auf `Rasenmaeher` wie in 1.1.4; 1.1.5 hatte ihn auf `Rasenmäher`
+geändert, und das ist der Gerätename in Loxone Config. Aus demselben Grund
+bleiben die drei ASCII-Umschriften in den Titeln der Ausgangsvorlage stehen —
+`Werkzeuge/umschrift_pruefen.py` meldet dafür eine Fundstelle, und die ist
+gewollt.
+
+## Neu in 1.1.5
+
+Bis 1.1.4 lieferte die Vorlage der Steuerbefehle **sechs Ausgänge ohne
+Beschriftung**.
+
+Loxone Config nimmt den `Comment` einer Vorlage als **Anzeigenamen**. Stand
+dort nichts, zeigte Config den Titel. Jetzt steht dort ein Name mit
+Gerätevorsatz — die Bausteinsuche des Miniservers kennt den Geräteknoten
+nicht, und „Automatik" gibt es auch im Batterie-Plugin.
+
+**Die Titel sind unverändert geblieben** — ein geänderter Titel legt beim
+erneuten Import neue Ausgänge **neben** die alten. Wer die Vorlage neu
+einliest, bekommt dieselben Ausgänge, nur mit Namen.
+
+`Maeher starten` → **Mäher: starten**, `Automatik` → **Mäher: Automatik**.
+
+Gemessen: 6 von 6 Titeln und Befehlen byteweise wie in 1.1.4, 0 Ausgänge ohne
+Beschriftung (vorher 6), längster Anzeigename 31 Zeichen. Im Kopf der Vorlage
+steht jetzt außerdem, dass Loxone Config beim Import neu anlegt und nichts
+überschreibt. In beiden Vorlagenköpfen ist die ASCII-Umschrift berichtigt:
+„ueber" und „enthaelt" im Ausgang, „ueberschreibt" im Eingang — diese drei
+Wörter standen in Loxone Config auf dem Bildschirm.
+
+**Was NICHT geändert ist:** die Beschriftungen der Eingänge in `mo_felder()`
+tragen weiter ASCII-Umschrift („Maeher erreichbar"). Das sind Anzeigenamen
+bestehender Eingänge; sie zu berichtigen ist eine eigene Entscheidung.
+
 ## Neu in 1.1.4
 
 Diese Fassung behebt neunzehn gemessene Befunde aus einer vollständigen
@@ -327,8 +519,8 @@ liefern in beiden Sprachen zeichengleiche Ausgabe ohne eine Meldung.
 | Aufruf | Zweck |
 |---|---|
 | `/plugins/robonect/mower.php` | Loxone-Zeile `MOWER;OK=..;CODE=..;BATT=..;STUNDEN=..;MESSER=..;…` |
-| `/plugins/robonect/mower.php?json=1` | kompletter Zustand als JSON |
-| `/plugins/robonect/mower.php?refresh=1` | Zwischenspeicher übergehen und frisch messen |
+| `/plugins/robonect/mower.php?json=1` | kompletter Zustand als JSON. **Ohne Token ab 1.1.6 ohne die Klartextfelder** `name`, `text`, `grundtext`, `fehlertext` — sie trugen Name und Adresse des Mähers |
+| `/plugins/robonect/mower.php?refresh=1&token=…` | Zwischenspeicher übergehen und frisch messen. **Token nötig ab 1.1.6** |
 | `/plugins/robonect/mower.php?dev=2` | zweiter Mäher (1 bis 9; unzulässige Nummern werden mit HTTP 400 abgewiesen) |
 | `/plugins/robonect/mower.php?debug=1&token=…` | Klartext-Übersicht **(Token nötig ab 1.1.4)** |
 | `/plugins/robonect/mower.php?selftest=1&token=…` | prüft nur das Token, löst nichts aus |
@@ -348,14 +540,29 @@ sie abschrieb, bekam 403.
 wird seit 1.1.4 mit HTTP 400 und `ERR=MEHRDEUTIG` abgewiesen. Bis 1.1.3 gewann
 stillschweigend das JSON, und der Befehl geschah nie.
 
+
+### Der Datenordner und die Zweitschrift
+
+`config/plugins/robonect/mower.json` wird bei **jedem** Update von LoxBerry
+abgeräumt (`purge_installation`). Gerettet wird sie über `preupgrade.sh` und
+über die Zweitschrift `config/plugins/robonect.backup.json`, die **neben**
+dem Ordner liegt und deshalb überlebt. Dasselbe gilt für `lauf.json`,
+`fehler.json` und `statistik.json` im Datenordner; `endpunkt.json` wird
+bewusst nicht gerettet.
+
 `cron.php` im selben Verzeichnis ist **kein** Endpunkt, sondern der minutliche
 Lauf. Er antwortet seit 1.1.4 nur noch auf der Kommandozeile; ein Aufruf über
 HTTP wird mit HTTP 403 abgewiesen (siehe *Neu in 1.1.4*).
 
 ## Sicherheit
 
-- Zugangsdaten ausschließlich in `config/plugins/robonect/mower.json`
-  (Dateirechte 0600), Übertragung per HTTP-Basic-Auth statt in der URL
+- Zugangsdaten in `config/plugins/robonect/mower.json` **und** in der
+  Zweitschrift `config/plugins/robonect.backup.json` daneben (beide mit
+  Dateirechten 0600). Übertragung per HTTP-Basic-Auth statt in der URL.
+  Bis 1.1.5 stand hier „ausschließlich in mower.json" — das war falsch: die
+  Zweitschrift trägt denselben Inhalt samt Kennwort und Aktionstoken und
+  überlebt Update und Neuinstallation absichtlich. Entfernt wird sie beim
+  Deinstallieren (`uninstall/uninstall`)
 - Das Passwortfeld zeigt den gespeicherten Wert nie an; leer lassen behält ihn
 - Vor dem Schreiben ins Protokoll werden Passwörter maskiert
 - **Keine personenbezogenen Daten** im Plugin selbst

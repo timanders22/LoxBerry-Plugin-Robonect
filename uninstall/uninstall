@@ -18,16 +18,55 @@
 
 PDIR=$3
 [ -n "$PDIR" ] || PDIR="robonect"
+
+# B9 (06.09.2026): der Ordnername geht in "rm -rf /tmp/$PDIR". Er kommt aus
+# der Plugin-Datenbank und ist dort geprueft; ueber den offiziellen Weg ist
+# hier nichts zu holen. Eine Positivliste kostet trotzdem nichts, und ein
+# "." als drittes Argument zeigte auf /tmp selbst.
+case "$PDIR" in
+    *[!A-Za-z0-9_-]*)
+        echo "<INFO> Unzulaessiger Ordnername - es wird nichts entfernt: $PDIR"
+        exit 0
+        ;;
+esac
+
 BASE="${5:-$LBHOMEDIR}"
-# Dritter Rueckfall: der eigene Ablageort. Bewusst kein fest verdrahteter
-# Systempfad - LoxBerry laesst sich anderswohin installieren, und der
-# Plugin-Pruefer sucht die Zeichenkette, ohne den Zusammenhang zu sehen.
-# Dieses Skript liegt unter <home>/data/plugins/<ordner>/uninstall/
+# A17 (06.09.2026, gemessen): hier stand
+#     BASE=$(cd "$(dirname "$(readlink -f "$0")")/../../../.." && pwd)
+# mit dem Kommentar, das Skript liege unter <home>/data/plugins/<ordner>/
+# uninstall/. Beides ist falsch: plugininstall.pl:1158 kopiert es nach
+# <home>/data/system/uninstall/<name>, also DREI Ebenen unter der Wurzel,
+# nicht vier. Der Rueckfall landete damit ueber der LoxBerry-Wurzel, fand
+# die Zweitschrift nicht und gab eine Entwarnung ueber eine Datei mit
+# Kennwort und Aktionstoken.
+#
+# Eine feste Zahl ".." ist ohnehin die naechste Wette (Regeln/06): gesucht
+# wird jetzt aufwaerts nach einem Verzeichnis, das config/plugins UND
+# data/plugins traegt. Bewusst kein fest verdrahteter Systempfad - LoxBerry
+# laesst sich anderswohin installieren.
 if [ -z "$BASE" ] || [ ! -d "$BASE" ]; then
-    BASE=$(cd "$(dirname "$(readlink -f "$0")")/../../../.." 2>/dev/null && pwd)
+    SUCH=$(dirname "$(readlink -f "$0")")
+    STUFE=0
+    while [ "$STUFE" -lt 8 ]; do
+        if [ -d "$SUCH/config/plugins" ] && [ -d "$SUCH/data/plugins" ]; then
+            BASE="$SUCH"
+            break
+        fi
+        ELTERN=$(dirname "$SUCH")
+        [ "$ELTERN" = "$SUCH" ] && break
+        SUCH="$ELTERN"
+        STUFE=$((STUFE + 1))
+    done
+fi
+
+if [ -z "$BASE" ] || [ ! -d "$BASE/config/plugins" ]; then
+    echo "<INFO> Das LoxBerry-Verzeichnis war nicht zu bestimmen - es wird nichts entfernt."
+    echo "<INFO> Von Hand nachsehen: config/plugins/$PDIR.backup.json und /tmp/$PDIR."
+    exit 0
 fi
 
 BK="$BASE/config/plugins/$PDIR.backup.json"
+CF="$BASE/config/plugins/$PDIR/mower.json"
 # A12: derselbe Ordnername wie in mo_paths(). Bis 1.1.3 stand hier - wie
 # dort - fest "robonect"; bei einer Zweitinstallation haengt LoxBerry '01'
 # an den Ordnernamen, und dann raeumte die Deinstallation den Arbeitsordner
@@ -35,18 +74,48 @@ BK="$BASE/config/plugins/$PDIR.backup.json"
 TMP="/tmp/$PDIR"
 
 if [ -f "$BK" ]; then
+    # Vor dem Loeschen ueberschreiben. Das ist KEINE Zusicherung, dass die
+    # Bytes von der SD-Karte verschwinden (Journal, Wear-Levelling) - es
+    # nimmt nur den offensichtlichen Fall, dass die Datei nach dem
+    # Loeschen noch lesbar herumliegt.
+    dd if=/dev/zero of="$BK" bs=1 count="$(wc -c < "$BK" 2>/dev/null || echo 0)" \
+       conv=notrunc >/dev/null 2>&1
     rm -f "$BK" && echo "<OK> Sicherung der Konfiguration entfernt: $PDIR.backup.json"
-    echo "<INFO> Zugangsdaten des Maehers und das Aktionstoken sind damit fort."
 else
     echo "<INFO> Keine Sicherung ausserhalb des Plugin-Ordners vorhanden."
+fi
+
+# ------------------------------------------------------------------
+# A16 (06.09.2026, gemessen): erst nachzaehlen, dann Entwarnung geben.
+# ------------------------------------------------------------------
+# Bis 1.1.5 stand hier unbedingt "<INFO> Zugangsdaten des Maehers und das
+# Aktionstoken sind damit fort." - waehrend mower.json noch dalag. Dieses
+# Skript laeuft als Schritt 3 von purge_installation
+# (plugininstall.pl:1567); config/plugins/<ordner>/ wird erst in Schritt 7
+# geloescht (:1617). Die Zusage stimmte am Ende des Laufs, aber nicht in
+# dem Augenblick, in dem sie ausgegeben wurde - und geprueft hat sie
+# niemand.
+UEBRIG=""
+for F in "$BK" "$CF" "$CF.kaputt"; do
+    [ -e "$F" ] && UEBRIG="$UEBRIG $(basename "$F")"
+done
+if [ -z "$UEBRIG" ]; then
+    echo "<OK> Zugangsdaten des Maehers und das Aktionstoken sind fort."
+else
+    echo "<INFO> Noch vorhanden:$UEBRIG"
+    echo "<INFO> LoxBerry entfernt config/plugins/$PDIR/ im naechsten Schritt selbst."
 fi
 
 if [ -d "$TMP" ]; then
     rm -rf "$TMP" && echo "<OK> Zwischenspeicher $TMP entfernt."
 fi
 
-echo "<WARNING> Im MQTT-Broker koennen Werte stehen bleiben."
+# A29: <WARNING> ist fuer Fehler AM PLUGIN reserviert (Regeln/06). Was im
+# fremden Broker liegenbleibt, ist ein Aufraeumhinweis - jede planmaessige,
+# fehlerfreie Deinstallation erzeugte hier bisher eine Warnung.
+echo "<INFO> Im MQTT-Broker koennen Werte stehen bleiben."
 echo "<INFO> Das Plugin veroeffentlicht unter dem eingestellten Themenpraefix"
-echo "<INFO> (Vorgabe: maeher/...). Zum Aufraeumen: LoxBerry -> System ->"
-echo "<INFO> MQTT Gateway."
+echo "<INFO> (Vorgabe: maeher/...). Seit 1.1.6 sind die Zustaende retained und"
+echo "<INFO> bleiben deshalb im Broker stehen. Zum Aufraeumen: LoxBerry ->"
+echo "<INFO> System -> MQTT Gateway."
 exit 0

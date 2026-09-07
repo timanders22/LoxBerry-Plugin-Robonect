@@ -9,8 +9,39 @@
 # geht in das Protokoll des Plugins - dort, wo der Anwender ohnehin nachsieht.
 ERR=$(php "REPLACELBPHTMLDIR/cron.php" 2>&1 >/dev/null)
 RC=$?
-if [ "$RC" -ne 0 ]; then
-    printf '%s CRON rc=%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$RC" "$ERR" \
+[ "$RC" -eq 0 ] && exit 0
+
+# ------------------------------------------------------------------
+# A28 (06.09.2026): ein Dauerzustand gehoert in die gebremste Meldung.
+# ------------------------------------------------------------------
+# Bis 1.1.5 hing diese Zeile mit ">>" ungebremst am Protokoll. Die Kappung
+# bei 512 000 Byte steckt in mo_log() - sie greift nur, wenn PHP schreibt,
+# also ausgerechnet in dem Fall nicht, in dem PHP gar nicht mehr laeuft
+# (fehlendes php nach einem Distributionswechsel: rc=127; ein Abbruch nach
+# einem halben Upgrade). Das waeren 1440 Zeilen am Tag, ungekuerzt in der
+# Laenge, auf einer Ramdisk.
+#
+# Jetzt: erste Zeile, hoechstens 500 Zeichen, und dieselbe Meldung
+# hoechstens einmal je Stunde. Wechselt der Befund, geht er sofort hinaus -
+# eine Bremse, die einen NEUEN Fehler verschluckt, waere schlimmer als gar
+# keine.
+ERR=$(printf '%s' "$ERR" | tr '\n\r\t' '   ' | cut -c1-500)
+TMPD="/tmp/REPLACELBPPLUGINDIR"
+MRK="$TMPD/cron_fehler"
+mkdir -p "$TMPD" 2>/dev/null
+
+NEU="rc=$RC $ERR"
+ALT=""
+[ -f "$MRK" ] && ALT=$(cat "$MRK" 2>/dev/null)
+
+MTIME=$(date -r "$MRK" '+%s' 2>/dev/null)
+[ -n "$MTIME" ] || MTIME=0
+JETZT=$(date '+%s')
+SEIT=$((JETZT - MTIME))
+
+if [ "$NEU" != "$ALT" ] || [ "$SEIT" -ge 3600 ]; then
+    printf '%s CRON %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$NEU" \
         >> "REPLACELBPLOGDIR/mower.log" 2>/dev/null
+    printf '%s' "$NEU" > "$MRK" 2>/dev/null
 fi
 exit 0
