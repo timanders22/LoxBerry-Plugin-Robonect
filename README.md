@@ -12,6 +12,32 @@ Zugangsdaten lokal (Dateirechte 0600, HTTP-Basic-Auth) — Loxone ruft nur noch
 
 Kompatibel mit LoxBerry 3.x und **LoxBerry 4** (reines PHP, PHP 7.4 und 8.x).
 
+## Neu in 1.1.9
+
+**Temperatur und Feuchte kommen jetzt an.** Bis 1.1.8 stand in der Kachel
+`-999 °C`, obwohl der Mäher 34 °C meldete — und dasselbe stand am Miniserver.
+Das Modul (Robonect Hx+, Anwendung V1.6) legt beide Werte unter
+`health.climate` ab; gelesen wurde `health.temperature`, ein Feld, das es dort
+nicht gibt. Beide Schreibweisen werden jetzt angenommen.
+
+Dabei fiel auf, dass die **Statusantwort die Werte längst mitträgt**. Wo sie
+das tut, entfällt der zweite HTTP-Abruf — ein Geräteabruf je Mäher und
+Durchgang weniger.
+
+**Das Adressfeld ist breiter.** Es war 51 Pixel breit und zeigte von
+`192.168.178.34` nur `192.` — als einzige Spalte der Mähertabelle hatte es
+keine Breitenangabe bekommen und lebte von dem, was die anderen übrig ließen.
+
+**Umlaute, wo ein Mensch liest.** Der Zustand heißt jetzt „mäht", „lädt" und
+„schläft" statt „maeht", „laedt", „schlaeft" — in der Kachel, im
+zurückbehaltenen MQTT-Thema `<Präfix>/status` und in `?json=1`. Ebenso fünf
+Meldungen der Oberfläche und des Endpunkts. Der **Titel des Plugins** heißt
+„Rasenmäher (Robonect)".
+
+Unverändert bleiben die **Feldnamen und MQTT-Themen** (`maeht`, `laedt`,
+`zaehler`, Präfix `maeher`) — an ihnen hängen bestehende Anlagen — und die
+**Protokollzeilen**.
+
 ## Neu in 1.1.8
 
 Der Statustext geht jetzt in die Änderungssignatur ein — und wird dafür

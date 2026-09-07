@@ -620,7 +620,7 @@ $mw_host = mw_e(isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : '<loxberr
 <h2><?php echo sprintf(mw_e(mo_t('TEXT.H_MAEHER')), mo_max_maeher()); ?></h2>
 <div class="sm-breit">
 <table class="sm-tbl">
-<tr><th style="width:36px;"><?php echo mw_e(mo_t('TEXT.NR')); ?></th><th style="width:24%;"><?php echo mw_e(mo_t('TEXT.NAME_FREI')); ?></th><th><?php echo mw_e(mo_t('TEXT.ADRESSE')); ?></th><th style="width:18%;"><?php echo mw_e(mo_t('TEXT.BENUTZER')); ?></th><th style="width:20%;"><?php echo mw_e(mo_t('TEXT.PASSWORT')); ?></th><th style="width:110px;"><?php echo mw_e(mo_t('TEXT.MESSER_IV_KURZ')); ?></th><th style="width:110px;"><?php echo mw_e(mo_t('TEXT.MESSER_NP_KURZ')); ?></th><th style="width:70px;"><?php echo mw_e(mo_t('TEXT.LOESCHEN')); ?></th></tr>
+<tr><th style="width:36px;"><?php echo mw_e(mo_t('TEXT.NR')); ?></th><th style="width:20%;"><?php echo mw_e(mo_t('TEXT.NAME_FREI')); ?></th><th style="width:20%;"><?php echo mw_e(mo_t('TEXT.ADRESSE')); ?></th><th style="width:13%;"><?php echo mw_e(mo_t('TEXT.BENUTZER')); ?></th><th style="width:13%;"><?php echo mw_e(mo_t('TEXT.PASSWORT')); ?></th><th style="width:110px;"><?php echo mw_e(mo_t('TEXT.MESSER_IV_KURZ')); ?></th><th style="width:110px;"><?php echo mw_e(mo_t('TEXT.MESSER_NP_KURZ')); ?></th><th style="width:70px;"><?php echo mw_e(mo_t('TEXT.LOESCHEN')); ?></th></tr>
 <?php
 /* Vorhandene Zeilen plus EINE leere zum Anlegen - hoechstens mo_max_maeher().
    Der Index steht ausgeschrieben, siehe die Begruendung am Speicher-Handler. */

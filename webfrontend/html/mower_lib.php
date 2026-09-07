@@ -732,7 +732,7 @@ function mo_stumm_loeschen($dev) {
  * ================================================================== */
 function mo_api_roh($cmd, $dev = 1, $extra = '', $tmo = 3) {
     $m = mo_mower($dev);
-    if ($m === null) { return array(null, 'nicht_konfiguriert', 'Maeher nicht konfiguriert'); }
+    if ($m === null) { return array(null, 'nicht_konfiguriert', 'Mäher nicht konfiguriert'); }
     // Antwortet er gerade nicht, gar nicht erst warten.
     if (mo_stumm($dev)) { return array(null, 'stumm', mo_text_nicht_erreichbar()); }
 
@@ -864,9 +864,9 @@ function mo_write_json($datei, $daten) {
 
 /** Robonect-Statuscode -> Klartext. */
 function mo_status_text($code) {
-    $t = array(0 => 'Status wird ermittelt', 1 => 'parkt', 2 => 'maeht', 3 => 'sucht die Ladestation',
-               4 => 'laedt', 5 => 'sucht', 6 => 'Abschluss der Bearbeitung', 7 => 'Fehler',
-               8 => 'Schleifensignal verloren', 16 => 'abgeschaltet', 17 => 'schlaeft', 18 => 'wird gewartet');
+    $t = array(0 => 'Status wird ermittelt', 1 => 'parkt', 2 => 'mäht', 3 => 'sucht die Ladestation',
+               4 => 'lädt', 5 => 'sucht', 6 => 'Abschluss der Bearbeitung', 7 => 'Fehler',
+               8 => 'Schleifensignal verloren', 16 => 'abgeschaltet', 17 => 'schläft', 18 => 'wird gewartet');
     return isset($t[(int) $code]) ? $t[(int) $code] : 'unbekannt (' . (int) $code . ')';
 }
 /** Betriebsart -> Klartext. */
@@ -919,6 +919,41 @@ function mo_grund_klasse($grund)
 {
     if ($grund === 'keine_antwort' || $grund === 'stumm') { return 'nicht_erreichbar'; }
     return ((string) $grund !== '') ? (string) $grund : 'ok';
+}
+
+/**
+ * Temperatur und Feuchte aus einem health-Block holen - egal, wo sie liegen.
+ *
+ * 1.1.9 (07.09.2026, am Geraet gemessen): das Modul (Robonect Hx+, Anwendung
+ * V1.6) legt beide Werte unter 'climate' ab, nicht flach:
+ *
+ *     cmd=health -> health.alarm, health.voltages, health.climate
+ *                   health.temperature           GIBT ES NICHT
+ *                   health.climate.temperature = 34
+ *
+ * Welche aeltere Robonect-Fassung die flache Form liefert, ist NICHT
+ * gemessen - deshalb wird sie nicht ausgeschlossen, sondern als zweiter
+ * Versuch gelesen. Erst 'climate', dann flach; der erste Block, der
+ * wenigstens einen der beiden Werte traegt, gewinnt.
+ *
+ * Rueckgabe: array('temperatur' => Zahl|null, 'feuchte' => Zahl|null) oder
+ * null, wenn nichts zu holen war. Ein null-Wert heisst "nicht geliefert" -
+ * der Aufrufer laesst dann seinen Fehlwert stehen und erfindet keine Zahl.
+ */
+function mo_klima_aus($block)
+{
+    if (!is_array($block)) { return null; }
+    $quellen = array();
+    if (isset($block['climate']) && is_array($block['climate'])) { $quellen[] = $block['climate']; }
+    $quellen[] = $block;
+    foreach ($quellen as $q) {
+        $t = (isset($q['temperature']) && is_numeric($q['temperature'])) ? $q['temperature'] : null;
+        $f = (isset($q['humidity']) && is_numeric($q['humidity'])) ? $q['humidity'] : null;
+        if ($t !== null || $f !== null) {
+            return array('temperatur' => $t, 'feuchte' => $f);
+        }
+    }
+    return null;
 }
 
 /** Kompletter Zustand eines Maehers (mit Cache). */
@@ -998,20 +1033,42 @@ function mo_state($dev = 1, $force = false) {
         if ($st['code'] === 7 && $st['fehler'] === 0) { $st['fehler'] = 1; }
         if ($mo_fehlt) {
             $st['grund'] = 'feld_fehlt';
-            $st['grundtext'] = 'Das Modul liefert keine brauchbare Zahl fuer: '
+            $st['grundtext'] = 'Das Modul liefert keine brauchbare Zahl für: '
                              . implode(', ', array_unique($mo_fehlt));
         }
     } elseif ($st['grundtext'] !== '') {
         // Der Grund gehoert in den angezeigten Text, nicht nur ins Protokoll.
         $st['text'] = $st['grundtext'];
     }
-    /* Temperatur und Feuchte kommen aus einem ZWEITEN Abruf. Der wird nur
-       versucht, wenn der erste geklappt hat - sonst kostete ein stummer
-       Maeher die Zeitgrenze doppelt. Gemessen waren das 16 s statt 8. */
-    $h = ($st['ok'] === 1) ? mo_api('health', $dev) : null;
-    if (is_array($h) && isset($h['health'])) {
-        if (isset($h['health']['temperature'])) { $st['temperatur'] = round((float) $h['health']['temperature'], 1); }
-        if (isset($h['health']['humidity'])) { $st['feuchte'] = round((float) $h['health']['humidity'], 1); }
+    /* 1.1.9 (07.09.2026, am Geraet gemessen): Temperatur und Feuchte kamen
+     * NIE an. Der Maeher meldete 34 Grad und 25 % - angezeigt wurden -999
+     * und -1, und zwar bis in den Miniserver hinein (Baustein "Maeher
+     * Temperatur" = -999, waehrend "Maeher Akku" = 97 stand; am Weg lag es
+     * also nicht). Bis 1.1.8 wurde $h['health']['temperature'] gelesen -
+     * ein Feld, das dieses Modul nicht hat, siehe mo_klima_aus().
+     *
+     * Der Fehler ist nicht neu: vor A10 (1.1.4) stand hier eine 0 statt
+     * eines Fehlwerts, und eine 0 sieht aus wie ein Messwert. Erst der
+     * sichtbare Fehlwert hat ihn verraten.
+     *
+     * ZUERST die Statusantwort: sie traegt beide Werte laengst mit, und
+     * zwar flach (status.health.temperature = 34, gemessen). Der zweite
+     * HTTP-Abruf war ihr einziger Verwender - wo die Statusantwort sie hat,
+     * faellt er jetzt weg. Das ist ein Geraeteabruf je Maeher und Durchgang
+     * weniger; genau die zwei Abrufe, die im Ausfall die 16 Sekunden
+     * erzeugten (siehe die Zeitgrenzen weiter oben).
+     *
+     * Fehlt der Block dort, wird wie bisher health abgerufen - aber nur bei
+     * erreichbarem Maeher, sonst kostete ein stummer Maeher die Zeitgrenze
+     * doppelt. */
+    $klima = mo_klima_aus(isset($j['health']) ? $j['health'] : null);
+    if ($klima === null && $st['ok'] === 1) {
+        $h = mo_api('health', $dev);
+        $klima = mo_klima_aus((is_array($h) && isset($h['health'])) ? $h['health'] : null);
+    }
+    if ($klima !== null) {
+        if ($klima['temperatur'] !== null) { $st['temperatur'] = round((float) $klima['temperatur'], 1); }
+        if ($klima['feuchte'] !== null) { $st['feuchte'] = round((float) $klima['feuchte'], 1); }
     }
     // Messerlaufzeit seit dem letzten Wechsel
     /* je Maeher, mit Rueckfall auf die Vorgabe - aufgeloest in mo_mowers().
@@ -1064,13 +1121,13 @@ function mo_state($dev = 1, $force = false) {
  */
 function mo_command($cmd, $dev = 1, $param = '', $probe = false) {
     $m = mo_mower($dev);
-    if ($m === null) { return array(0, 'Maeher nicht konfiguriert', 'anlage'); }
+    if ($m === null) { return array(0, 'Mäher nicht konfiguriert', 'anlage'); }
     $cmd = strtolower(trim((string) $cmd));
     /* A13: bis 1.1.5 wurde ?p= bei jedem Befehl angenommen und ausser bei
      * job wirkungslos verworfen - und ging trotzdem in die Protokollzeile.
      * Abgewiesen und gemeldet statt still ignoriert. */
     if ($cmd !== 'job' && trim((string) $param) !== '') {
-        return array(0, 'Der Parameter p gilt nur fuer den Befehl job', 'anfrage');
+        return array(0, 'Der Parameter p gilt nur für den Befehl job', 'anfrage');
     }
     $map = array('auto' => array('mode', 'mode=auto'), 'manuell' => array('mode', 'mode=man'),
                  'man' => array('mode', 'mode=man'), 'home' => array('mode', 'mode=home'),
@@ -1100,7 +1157,7 @@ function mo_command($cmd, $dev = 1, $param = '', $probe = false) {
                                   . ' (erlaubt: ' . implode(', ', $erlaubt) . ')', 'anfrage');
                 }
                 if (preg_match('/^[0-9A-Za-z:.\-]{1,16}$/', $v) !== 1) {
-                    return array(0, 'Unzulaessiger Wert fuer ' . $k . ': ' . mo_kuerzen($v, 40), 'anfrage');
+                    return array(0, 'Unzulässiger Wert für ' . $k . ': ' . mo_kuerzen($v, 40), 'anfrage');
                 }
                 $teile[] = rawurlencode($k) . '=' . rawurlencode($v);
             }
