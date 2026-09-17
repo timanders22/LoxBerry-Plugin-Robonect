@@ -12,6 +12,20 @@ Zugangsdaten lokal (Dateirechte 0600, HTTP-Basic-Auth) — Loxone ruft nur noch
 
 Kompatibel mit LoxBerry 3.x und **LoxBerry 4** (reines PHP, PHP 7.4 und 8.x).
 
+## Neu in 1.1.10
+
+Die Einheit der Temperatur heißt jetzt **`°C`** statt `GradC`.
+
+Sie steht an zwei Stellen: im `Comment` der Importvorlage
+(„Temperatur am Mäher [°C]") und im Attribut `Unit`
+(`Unit="&lt;v.1&gt; °C"`) — dort erscheint sie in Loxone neben dem Wert.
+
+Das ist genau die Form, die Loxone Config selbst ausgibt: die maßgeblichen
+Ausfuhren schreiben `&lt;v.1&gt; °C` in UTF-8. **Ohne Wirkung auf eine
+laufende Anlage** — Titel und Suchtexte sind unverändert, und eine Einheit ist
+eine Eigenschaft des Bausteins; beim erneuten Import entsteht nichts **neben**
+dem Bestehenden.
+
 ## Neu in 1.1.9
 
 **Temperatur und Feuchte kommen jetzt an.** Bis 1.1.8 stand in der Kachel
@@ -99,9 +113,7 @@ Anzeigename hängt nicht am Suchtext. Unverändert bleiben die **Titel**
 gemessen, 22 von 22 Titeln und 22 von 22 Suchtexten byteweise gleich mit
 1.1.6, ebenso die sieben Titel und Adressen der Steuerbefehle.
 
-**Nicht umgestellt** ist die Einheit `GradC` (`MOWER_TEMP`). Sie geht sowohl
-in den `Comment` als auch in das Attribut `Unit`; ob dort `°C` stehen soll,
-ist eine eigene Entscheidung und keine Fehlerbehebung.
+**Nachgezogen in 1.1.10:** die Einheit heißt jetzt `°C` (siehe dort).
 
 ## Neu in 1.1.6
 

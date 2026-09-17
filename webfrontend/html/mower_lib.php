@@ -2066,9 +2066,20 @@ function mo_check($feld) { return '\i;' . $feld . '=\i\v'; }
  * und die Suchtexte sind unveraendert; ein geaenderter Titel legte neue
  * Bausteine NEBEN die alten.
  *
- * NICHT umgestellt ist die Einheit 'GradC' weiter unten. Sie geht sowohl in
- * den Comment als auch in das Attribut Unit - ob dort '°C' stehen soll, ist
- * eine eigene Entscheidung.
+ * 1.1.10 (07.09.2026, Entscheidung des Hausherrn): die Einheit heisst jetzt
+ * '°C' statt 'GradC'. Sie geht an ZWEI Stellen hinaus - in den Comment
+ * ("Temperatur am Mäher [°C]") und in das Attribut Unit
+ * (Unit="&lt;v.1&gt; °C"), und dort steht sie in Loxone neben dem Wert.
+ *
+ * Vorher gemessen, damit hier nichts Neues erfunden wird: die massgebliche
+ * Ausfuhr aus Loxone Config selbst (XML_Vorlagen_0.9.10,
+ * VI_weissware_geraet1_verbrauch.xml) schreibt genau diese Form, in UTF-8
+ * (das Gradzeichen als c2 b0), Deklaration encoding="utf-8", ohne BOM. Die
+ * erzeugte Vorlage dieses Plugins ist ebenfalls UTF-8.
+ *
+ * Wie beim Comment gilt: ohne Wirkung auf eine laufende Anlage. Titel und
+ * Suchtexte bleiben unangetastet, die Einheit ist eine Eigenschaft des
+ * Bausteins und legt beim erneuten Import nichts NEBEN das Bestehende.
  * ================================================================== */
 function mo_felder() {
     $cfg = mo_config();
@@ -2093,7 +2104,7 @@ function mo_felder() {
         'MESSER'     => array(1, -1, 10000,'h',  'Messer: Reststunden',
                               'bis zum Wechsel, -1 = nicht bekannt'),
         'MESSERWARN' => array(0, 0, 1,    '',    '1 = Messerwechsel fällig'),
-        'TEMP'       => array(1, -999, 80, 'GradC','Temperatur am Mäher',
+        'TEMP'       => array(1, -999, 80, '°C',  'Temperatur am Mäher',
                               '-999 = nicht bekannt; -1 wäre hier ein gültiger Messwert'),
         'FEUCHTE'    => array(1, -1, 100,  '%',  'Luftfeuchte am Mäher',
                               '-1 = nicht bekannt'),
