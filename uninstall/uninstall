@@ -42,13 +42,20 @@ BASE="${5:-$LBHOMEDIR}"
 #
 # Eine feste Zahl ".." ist ohnehin die naechste Wette (Regeln/06): gesucht
 # wird jetzt aufwaerts nach einem Verzeichnis, das config/plugins UND
-# data/plugins traegt. Bewusst kein fest verdrahteter Systempfad - LoxBerry
-# laesst sich anderswohin installieren.
+# data/plugins UND config/system/general.json traegt. Bewusst kein fest
+# verdrahteter Systempfad - LoxBerry laesst sich anderswohin installieren.
+#
+# 18.09.2026 (gemessen, Pruefung-Robonect-1.1.11 Fall U1): ohne die
+# general.json hielt die Suche jeden Baum mit config/plugins und
+# data/plugins fuer die Wurzel - auf einem Pruefrechner das Laufwerk selbst
+# (Regeln/06, Raumklima-Vorfall) - und loeschte dort eine fremde
+# <ordner>.backup.json. Ein LoxBerry hat die general.json immer.
 if [ -z "$BASE" ] || [ ! -d "$BASE" ]; then
     SUCH=$(dirname "$(readlink -f "$0")")
     STUFE=0
     while [ "$STUFE" -lt 8 ]; do
-        if [ -d "$SUCH/config/plugins" ] && [ -d "$SUCH/data/plugins" ]; then
+        if [ -d "$SUCH/config/plugins" ] && [ -d "$SUCH/data/plugins" ] \
+           && [ -f "$SUCH/config/system/general.json" ]; then
             BASE="$SUCH"
             break
         fi

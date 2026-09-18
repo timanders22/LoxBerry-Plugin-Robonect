@@ -22,7 +22,11 @@ date_default_timezone_set('Europe/Berlin');
 /* Den LoxBerry-Wurzelordner ohne festen Systempfad bestimmen.
  *
  * Vom eigenen Ablageort aufwaerts, bis ein Verzeichnis gefunden ist, das
- * config/plugins UND webfrontend enthaelt. Das trifft die uebliche
+ * config/plugins UND data/plugins UND config/system/general.json enthaelt
+ * (Regeln/06). Bis 18.09.2026 genuegten config/plugins und webfrontend; auf
+ * einem Pruefrechner trifft das das Laufwerk selbst, und die Bibliothek
+ * legte dort eine mower.json an (gemessen, Pruefung-Robonect-1.1.11 Fall
+ * P1). Ein LoxBerry hat die general.json immer. Das trifft die uebliche
  * Installation genauso wie eine an einem anderen Ort - und es trifft auch
  * den Fall, dass das Plugin noch als entpacktes Archiv daliegt (dann findet
  * es nichts und gibt einen Leerstring zurueck, was der Aufrufer ohnehin
@@ -36,7 +40,8 @@ if (!function_exists('lb_wurzel_ermitteln')) {
     {
         $d = __DIR__;
         for ($i = 0; $i < 8; $i++) {
-            if (is_dir($d . '/config/plugins') && is_dir($d . '/webfrontend')) {
+            if (is_dir($d . '/config/plugins') && is_dir($d . '/data/plugins')
+                && is_file($d . '/config/system/general.json')) {
                 return $d;
             }
             $eltern = dirname($d);
@@ -391,7 +396,12 @@ function mo_config(&$zustand = null, $erzeugen = true) {
             if ($erzeugen && !$gemeldet) {
                 $gemeldet = true;
                 $beiseite = $p['config'] . '.kaputt';
-                if (!is_file($beiseite)) { @copy($p['config'], $beiseite); }
+                /* Ueber den gemeinsamen Schreibweg, nicht mit copy(): copy()
+                 * legt mit den Rechten des Prozesses an (gemessen 644 bei
+                 * umask 022, Pruefung-Robonect-1.1.11 Fall K1) - und die
+                 * Datei traegt das Kennwort, soweit es vor der Beschaedigung
+                 * steht. $roh ist der Inhalt, byteweise. */
+                if (!is_file($beiseite)) { mo_write_atomic($beiseite, $roh, 0600); }
                 /* mo_log_roh und nicht mo_log: mo_log liest fuer die
                  * Passwortmaskierung die Konfiguration - von hier aus waere
                  * das eine Rekursion. In dieser Meldung steht ohnehin kein

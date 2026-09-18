@@ -12,6 +12,43 @@ Zugangsdaten lokal (Dateirechte 0600, HTTP-Basic-Auth) — Loxone ruft nur noch
 
 Kompatibel mit LoxBerry 3.x und **LoxBerry 4** (reines PHP, PHP 7.4 und 8.x).
 
+## Neu in 1.1.11
+
+**Die Installationsskripte entscheiden nach Inhalt, nicht nach Größe — und
+melden, was sie nachgelesen haben.** Bisher galt eine `mower.json` als
+vorhanden, sobald sie nicht leer und nicht `{}` war. Eine abgeschnittene Datei
+(Stromausfall, volle Speicherkarte) bestand diese Prüfung:
+
+* Beim Update ging die Kopie von vor dem Update **ungeprüft** über die
+  Einstellungen, die `postinstall.sh` gerade aus der Zweitschrift geholt
+  hatte; die Zweitschrift wurde danach nicht mehr geholt, und das Protokoll
+  meldete `<OK> Aktualisierung abgeschlossen. Die Einstellungen sind erhalten.`
+  — auch dann, wenn gar keine Einstellungen mehr lesbar waren.
+* Bei einer Neuinstallation wurde eine abgeschnittene Zweitschrift eingespielt
+  und als „aus Sicherung wiederhergestellt" gemeldet.
+
+Jetzt gilt als Inhalt nur ein gültiges, nicht leeres JSON-Objekt, bei der
+Zweitschrift zusätzlich mit Aktionstoken. Ein verdrängter, beschädigter Stand
+bleibt als `mower.json.kaputt` (Rechte 0600) liegen. Die Schlusszeile sagt, was
+in `mower.json` steht (Zahl der Mäher, Aktionstoken vorhanden oder nicht); ohne
+lesbare Einstellungen lautet sie `<WARNING>`, ohne `php` „ließ sich nicht prüfen".
+
+**`mower.json.kaputt` entsteht auch in der Bibliothek mit 0600.** Bisher legte
+`copy()` sie mit den Rechten des Prozesses an (gemessen 644 bei umask 022) —
+sie trägt das Kennwort, soweit es vor der Beschädigung steht.
+
+**Die LoxBerry-Wurzel wird nur noch dort erkannt, wo `config/system/general.json`
+liegt** — in der Bibliothek (wenn `LBHOMEDIR` fehlt) und im
+Deinstallationsskript (wenn der Installer keine Wurzel übergibt). Vorher
+genügten `config/plugins` und `webfrontend` bzw. `data/plugins`; auf einem
+Prüfrechner legte die Bibliothek dann eine `mower.json` in einem fremden Baum an,
+und die Deinstallation löschte dort eine fremde Zweitschrift. Auf einem
+LoxBerry ändert sich nichts: er hat die Datei immer.
+
+Gemessen in WSL (Ubuntu, PHP 8.3, bash 5.2) mit 42 Prüfzeilen, vorher 20 rot,
+nachher 0; jede Korrektur einzeln zurückgebaut und an ihrer Zeile rot. Nicht am
+Gerät gemessen.
+
 ## Neu in 1.1.10
 
 Die Einheit der Temperatur heißt jetzt **`°C`** statt `GradC`.
