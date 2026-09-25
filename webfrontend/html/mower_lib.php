@@ -52,35 +52,156 @@ if (!function_exists('lb_wurzel_ermitteln')) {
     }
 }
 
+/* Die Wurzel in der Reihenfolge der Hausregel: erst die Umgebung, dann die
+ * Suche - und DANACH NICHTS MEHR (Regeln/06).
+ *
+ * Ein gesetztes LBHOMEDIR gilt nur mit config/plugins UND data/plugins
+ * darunter; general.json wird hier nicht verlangt, damit die Attrappe der
+ * Pruefkette (Werkzeuge/lb) weiter traegt. Bis 1.1.12 galt jedes LBHOMEDIR:
+ * auf einen leeren Ordner gesetzt, legte cron.php aus einem Archiv dort
+ * config/plugins/robonect/mower.json, data/.../lauf.json und ein Protokoll
+ * an (in WSL gemessen, Pruefung-Robonect-1.1.12, Fall W8). Rueckgabe ''
+ * heisst "keine Wurzel"; jeder Aufrufer faengt das ab. */
+function mo_lbhome()
+{
+    $h = getenv('LBHOMEDIR');
+    if ($h && is_dir($h . '/config/plugins') && is_dir($h . '/data/plugins')) {
+        return rtrim($h, '/');
+    }
+    return lb_wurzel_ermitteln();
+}
+
 function mo_paths() {
-    $lb = getenv('LBHOMEDIR') ?: lb_wurzel_ermitteln();
-    $pd = getenv('LBPPLUGINDIR') ?: basename(__DIR__);
-    /* Rueckfall auf den vorgesehenen Ordnernamen - aber NUR, wenn dort
-     * entweder noch nichts liegt oder schon die EIGENE Konfigurationsdatei.
-     * Ein zweites Plugin darf denselben FOLDER beanspruchen (LoxBerry haengt
-     * dann '01' an); ein blanker Rueckfall schriebe in dessen Verzeichnis
-     * eine Datei, die niemand liest. Siehe REGELN_2, "Zwei Plugins duerfen
-     * denselben FOLDER beanspruchen - der Rueckfall darf es nicht". */
-    if ($lb && is_dir($lb . '/config/plugins/' . $pd) === false) {
-        $ziel = $lb . '/config/plugins/robonect';
-        if (!is_dir($ziel) || is_file($ziel . '/mower.json')) { $pd = 'robonect'; }
+    static $p = null;
+    if ($p !== null) { return $p; }
+    $home = mo_lbhome();
+    /* Der Ordnername: LBPPLUGINDIR ist die Auskunft von LoxBerry selbst,
+     * sonst der eigene Ablageort. Der feste Name 'robonect' greift nur, wo
+     * der Ablageort nachweislich kein Pluginordner sein KANN - aus dem
+     * ausgepackten Archiv heraus heisst er 'html'.
+     *
+     * Bis 1.1.12 fiel die Ermittlung auf 'robonect' zurueck, sobald
+     * config/plugins/<ordner> fehlte. Aus einem Archiv unter einer echten
+     * Wurzel zeigte das auf die Anlage (naechster Absatz); bei einer
+     * Zweitinstallation (robonect01) zeigte es, solange deren Konfigordner
+     * noch fehlte, auf die ERSTE Installation. */
+    $lbp = basename(rtrim((string) getenv('LBPPLUGINDIR'), '/'));
+    $kein_ordner = array('', '.', '/', 'html', 'htmlauth', 'webfrontend', 'plugins');
+    $lbp_gilt = !in_array($lbp, $kein_ordner, true);
+    $pd = $lbp_gilt ? $lbp : basename(__DIR__);
+    if (in_array($pd, $kein_ordner, true)) { $pd = 'robonect'; }
+    /* Archivmodus. Die Pfade DER ANLAGE gelten nur, wenn diese Bibliothek
+     * dort installiert liegt (<Wurzel>/webfrontend/html/plugins/<ordner>,
+     * physisch verglichen) oder der Aufrufer Wurzel UND Ordner ausdruecklich
+     * nennt ($LBHOMEDIR und $LBPPLUGINDIR - so arbeiten die Pruefwerkzeuge
+     * mit ihrer Attrappe und uninstall/uninstall mit der Anlage). Sonst ist
+     * das ein ausgepacktes Archiv oder ein Pruefordner, und alles bleibt in
+     * dessen eigenem Ordner.
+     *
+     * Bis 1.1.12 nahm ein Archiv unterhalb einer echten Wurzel diese Wurzel
+     * und den Ordner 'robonect': cron.php aus dem Archiv fragte den Maeher
+     * der Anlage, zaehlte ihr lauf.json hoch und schrieb in ihren
+     * Zwischenspeicher /tmp/robonect; mower.php lieferte ihre Werte (in WSL
+     * gemessen, Pruefung-Robonect-1.1.12, Faelle W3, W4). Bauart
+     * tb_paths() (Spotpreis-Tibber 0.9.19). */
+    $gefunden = $home;
+    if ($home !== '') {
+        $soll = @realpath($home . '/webfrontend/html/plugins/' . basename(__DIR__));
+        $ist = @realpath(__DIR__);
+        $installiert = ($soll !== false && $ist !== false && $soll === $ist);
+        $ausdruecklich = $lbp_gilt && $home === rtrim((string) getenv('LBHOMEDIR'), '/');
+        if (!$installiert && !$ausdruecklich) { $home = ''; }
     }
-    if ($lb) {
-        return array('config' => $lb . '/config/plugins/' . $pd . '/mower.json',
-                     'backup' => $lb . '/config/plugins/' . $pd . '.backup.json',
-                     'log' => $lb . '/log/plugins/' . $pd . '/mower.log',
-                     'datadir' => $lb . '/data/plugins/' . $pd,
-                     'tmp' => '/tmp/' . $pd, 'lbhome' => $lb,
-                     // Der Ordnername wird gebraucht, wo eine Adresse auf das
-                     // eigene Plugin zeigt - Endpunkt, Vorlage, Selbstpruefung.
-                     'plugin' => $pd);
+    if ($home !== '') {
+        $p = array('config' => $home . '/config/plugins/' . $pd . '/mower.json',
+                   'backup' => $home . '/config/plugins/' . $pd . '.backup.json',
+                   'log' => $home . '/log/plugins/' . $pd . '/mower.log',
+                   'datadir' => $home . '/data/plugins/' . $pd,
+                   /* Die Upgrade-Marke liegt NEBEN dem Datenordner:
+                    * purge_installation loescht den Ordner selbst
+                    * (Regeln/06). preupgrade.sh legt sie an, postupgrade.sh
+                    * raeumt sie weg; cron.php setzt aus, solange sie gilt
+                    * (mo_upgrade_marke_gilt()). */
+                   'marke' => $home . '/data/plugins/' . $pd . '.upgrade_laeuft',
+                   'tmp' => '/tmp/' . $pd, 'lbhome' => $home,
+                   // Der Ordnername wird gebraucht, wo eine Adresse auf das
+                   // eigene Plugin zeigt - Endpunkt, Vorlage, Selbstpruefung.
+                   'plugin' => $pd, 'archiv' => '');
+        return $p;
     }
-    return array('config' => dirname(dirname(__DIR__)) . '/config/mower.json',
-                 'backup' => dirname(dirname(__DIR__)) . '/config/mower.backup.json',
-                 'log' => sys_get_temp_dir() . '/' . $pd . '/mower.log',
-                 'datadir' => sys_get_temp_dir() . '/' . $pd . '/data',
-                 'tmp' => sys_get_temp_dir() . '/' . $pd, 'lbhome' => '',
-                 'plugin' => $pd);
+    /* Keine Wurzel: neben dem Plugin arbeiten, nie an einem festen Ort.
+     * Bis 1.1.12 lagen Zwischenspeicher, Daten und Protokoll hier unter
+     * sys_get_temp_dir()/<ordner> - mit dem Rueckfallnamen also unter
+     * /tmp/robonect, dem Zwischenspeicher der Anlage. cron.php steigt ohne
+     * Wurzel ohnehin vorher aus (mo_keine_wurzel_abbruch()). */
+    $basis = dirname(dirname(__DIR__));
+    $p = array('config' => $basis . '/config/mower.json',
+               'backup' => $basis . '/config/mower.backup.json',
+               'log' => $basis . '/log/mower.log',
+               'datadir' => $basis . '/data',
+               'marke' => $basis . '/data.upgrade_laeuft',
+               'tmp' => $basis . '/tmp', 'lbhome' => '',
+               'plugin' => $pd,
+               // Die gefundene Wurzel, wenn diese Datei NICHT darin
+               // installiert liegt - fuer die Meldung; sonst leer.
+               'archiv' => $gefunden);
+    return $p;
+}
+
+/* Fuer cron.php: ohne Wurzel nichts tun, eine Meldung auf stderr,
+ * Rueckgabewert 1. Der Aufruf steht VOR allem, was schreibt, misst oder
+ * sendet (Bauart tb_keine_wurzel_abbruch(), Spotpreis-Tibber 0.9.19). */
+function mo_keine_wurzel_abbruch($programm)
+{
+    $p = mo_paths();
+    if ($p['lbhome'] !== '') { return; }
+    if ($p['archiv'] !== '') {
+        fwrite(STDERR, $programm . ': Diese Datei liegt nicht in der Installation unter '
+            . $p['archiv'] . "\n"
+            . '(ausgepacktes Archiv oder Pruefordner). Damit nichts in die Anlage kommt,' . "\n"
+            . 'wurde nichts gemessen, nichts gesendet und nichts geschrieben.' . "\n"
+            . 'Abhilfe: das installierte Programm aufrufen oder LBHOMEDIR und LBPPLUGINDIR' . "\n"
+            . 'ausdruecklich setzen.' . "\n");
+        exit(1);
+    }
+    fwrite(STDERR, $programm . ': Es wurde kein LoxBerry-Wurzelverzeichnis gefunden.' . "\n"
+        . '$LBHOMEDIR traegt kein config/plugins und data/plugins, und oberhalb von ' . __DIR__ . "\n"
+        . 'traegt kein Verzeichnis config/plugins, data/plugins und config/system/general.json.' . "\n"
+        . 'Es wurde nichts gemessen, nichts gesendet und nichts geschrieben.' . "\n");
+    exit(1);
+}
+
+/**
+ * Gilt die Upgrade-Marke aus preupgrade.sh?
+ *
+ * Zwischen purge_installation und postupgrade.sh liegt fast eine Minute, in
+ * der die neue Cron-Datei schon laeuft (Regeln/06, am Geraet gemessen: Cron
+ * 03:31:32, postinstall erst 03:32:24). Lief der Takt dort, schrieb er ein
+ * frisches lauf.json (Zaehler 1), eine fehler.json mit nur dem neuen Eintrag
+ * und eine statistik.json mit nur dem neuen Einsatz in den gerade geleerten
+ * Datenordner; postupgrade.sh sah die Dateien und spielte die Rettung nicht
+ * zurueck. Gemessen in WSL (Pruefung-Robonect-1.1.12, Fall L1): Zaehler 500
+ * -> 1, fuenf Fehler -> 1, drei Einsaetze -> 1; und weil der Takt in der
+ * Luecke die Ereignisse schon gesehen hatte, erkannte auch der naechste sie
+ * nicht mehr.
+ *
+ * Die Marke gilt, wenn ihr Inhalt eine Zahl ist und hoechstens 3600 s alt
+ * - und bis 300 s "aus der Zukunft": die Uhr kann zwischen preupgrade.sh und
+ * hier ein Stueck zurueckspringen (Bauart Sprachsteuerung 0.11.9, Govee
+ * 0.9.20). Aelter, weiter in der Zukunft oder ohne Zahl gilt sie nicht - eine
+ * abgebrochene Installation darf den Takt nicht fuer immer stilllegen. Der
+ * Inhalt wird VOR der Rechnung als Zahl geprueft. time() liefert in PHP
+ * immer eine Zahl; der Fall "Uhr nicht lesbar" der Schalen-Bauart entsteht
+ * hier nicht.
+ */
+function mo_upgrade_marke_gilt()
+{
+    $p = mo_paths();
+    if (!is_file($p['marke'])) { return false; }
+    $roh = trim((string) @file_get_contents($p['marke']));
+    if (preg_match('/^[0-9]{1,12}$/', $roh) !== 1) { return false; }
+    $alter = time() - (int) $roh;
+    return $alter >= -300 && $alter < 3600;
 }
 
 function mo_vorgaben()
@@ -193,9 +314,14 @@ function mo_fassung()
         }
     }
     if ($v === '') {
-        // Ausgepacktes Archiv: die plugin.cfg liegt drei Ebenen hoeher.
-        $cfg = dirname(dirname(dirname(__DIR__))) . '/plugin.cfg';
-        if (!is_file($cfg)) { $cfg = dirname(dirname(__DIR__)) . '/plugin.cfg'; }
+        /* Ausgepacktes Archiv: die plugin.cfg liegt zwei Ebenen ueber
+         * webfrontend/html/. Bis 1.1.12 wurde zuerst DREI Ebenen hoeher
+         * gesucht - das ist der Ordner UEBER dem Archiv, und eine fremde
+         * plugin.cfg dort lieferte deren Nummer (in WSL gemessen:
+         * "6.6.6", Pruefung-Robonect-1.1.12, Fall W9). Installiert gibt es
+         * die plugin.cfg nicht (Regeln/06); dort gilt die Plugin-Datenbank
+         * oben. */
+        $cfg = dirname(dirname(__DIR__)) . '/plugin.cfg';
         if (is_file($cfg)) {
             $roh = (string) @file_get_contents($cfg);
             if (preg_match('/^VERSION=([^\r\n]+)/m', $roh, $m)) { $v = trim($m[1]); }
@@ -221,7 +347,7 @@ function mo_fassung()
 function mo_thema_feld()
 {
     return array(
-        'ok' => 'OK', 'code' => 'CODE', 'status' => '', 'modus' => 'MODUS',
+        'ok' => 'OK', 'code' => 'CODE', 'status' => '', 'maeherstatus' => '', 'modus' => 'MODUS',
         'batterie' => 'BATT', 'maeht' => 'MAEHT', 'laedt' => 'LAEDT',
         'fehler' => 'FEHLER', 'stunden' => 'STUNDEN', 'dauer' => 'DAUER',
         'messer_rest' => 'MESSER', 'messer_warn' => 'MESSERWARN',
@@ -1340,11 +1466,76 @@ function mo_mqtt_senden($port, array $zeilen)
  * Thema ohne Entscheidung ist ein Befund, kein stilles 'publish'.
  *
  * $schluessel ist das Thema OHNE Praefix: 'ok', 'batterie', 'status/ts'.
+ *
+ * Nachlese 25.09.2026 (Regeln/07 Abschnitt 3, Entscheidungen 18./19.09.
+ * und 24.09.2026): retained bleiben nur Aussagen ueber das GERAET. Bis
+ * 1.1.12 gingen hier auch ok, status, ann und ptest retained hinaus - siehe
+ * mo_mqtt_dienst(). In WSL am empfangenen Datagramm gemessen
+ * (Pruefung-Robonect-1.1.12, Faelle R1-R3).
  */
 function mo_mqtt_zustaende()
 {
-    return array('ok', 'code', 'status', 'modus', 'maeht', 'laedt', 'fehler',
-                 'messer_warn', 'timer', 'ann', 'audio', 'push', 'ptest');
+    return array('code', 'maeherstatus', 'modus', 'maeht', 'laedt', 'fehler',
+                 'messer_warn', 'timer', 'audio', 'push');
+}
+
+/**
+ * Nie retained: was der DIENST ueber sich sagt, und was allein durch die Uhr
+ * falsch wird.
+ *
+ *   ok      "Maeher beim letzten Messen erreichbar" - der Dienst schliesst es
+ *           aus dem Erfolg seiner EIGENEN Abfrage (mo_api_roh()). Stirbt der
+ *           Cron, bliebe eine zurueckbehaltene 1 stehen, und nach einem
+ *           Neustart von Broker oder Gateway laese Loxone "erreichbar" von
+ *           einem Dienst, der nicht mehr laeuft. Name ok: nie retained
+ *           (Entscheidung 18.09.2026).
+ *   status  Klartext. Antwortet der Maeher, ist er der Geraetestatus; sonst
+ *           sagt der Dienst "antwortet gerade nicht" oder "Benutzer oder
+ *           Passwort stimmen nicht (HTTP 401)" - eine Aussage ueber den
+ *           eigenen Abruf. Gemischtes Thema: es behaelt seine Bedeutung und
+ *           geht fluechtig; der Geraeteteil steht retained daneben als
+ *           maeherstatus (Bauart bmsalarm, BatterieBMS 0.9.28).
+ *   ann     Meldefenster aktiv - faellt nach 600 s von selbst auf 0
+ *           (mo_ann_active()). Zurueckbehalten waere eine 1 nach einem
+ *           Ausfall des Crons fuer immer "aktiv".
+ *   ptest   Test-Push, lebt 300 s (mo_ptest_active()) - dieselbe Lage;
+ *           zurueckbehalten loeste eine 1 nach jedem Neustart von Broker
+ *           oder Gateway den Test-Push erneut aus.
+ *
+ * Die Altwerte dieser vier aus 1.1.6 bis 1.1.12 raeumt mo_mqtt_publish() ab
+ * (mo_mqtt_altlast()).
+ */
+function mo_mqtt_dienst()
+{
+    return array('ok', 'status', 'ann', 'ptest');
+}
+
+/**
+ * Geraetethemen, die NUR retained hinausgehen, wenn der Maeher geantwortet hat.
+ *
+ * mo_state() setzt bei einer gescheiterten Abfrage Platzhalter: code -1,
+ * modus -1, maeht 0, laedt 0, fehler 0, messer_warn 0, timer 0. Bis 1.1.11
+ * gingen sie retained hinaus - ueber den zuletzt GEMESSENEN Stand: ein Maeher
+ * mit Fehler 17 stand nach einem WLAN-Abriss im Broker mit "fehler 0", und
+ * nach einem Neustart des Gateways blieb es dabei (Klasse E, Grenzfall
+ * "Platzhalter ueberschreiben den Geraetestand"; in WSL gemessen:
+ * code 1 -> -1, Fall R5d).
+ *
+ * Jetzt gehen die Platzhalter FLUECHTIG hinaus (Bauart KODI-NG 1.2.10):
+ * Loxone sieht "keine Verbindung" (code -1) live wie bisher - an diesem
+ * Thema haengen in bestehenden Anlagen Zustandsbausteine und Vergleicher -,
+ * und der Broker behaelt den letzten echten Geraetestand. maeherstatus, die
+ * retained Geraeteaussage, geht bei stummem Maeher gar nicht hinaus.
+ *
+ * Die Messwerte (batterie, temperatur, wlan ...) gehen weiter mit ihren
+ * Fehlwerten -1 bzw. -999 hinaus: sie sind fluechtig, und der Fehlwert ist
+ * dort die Aussage "nicht bekannt" (A10, 1.1.4). Ueber HTTP bleibt die
+ * Zeile unveraendert (CODE=-1 heisst dort weiter "keine Verbindung").
+ */
+function mo_mqtt_nur_bei_antwort()
+{
+    return array('code', 'maeherstatus', 'modus', 'maeht', 'laedt', 'fehler',
+                 'messer_warn', 'timer');
 }
 
 /**
@@ -1369,6 +1560,7 @@ function mo_mqtt_entschieden($schluessel)
     $s = (string) $schluessel;
     return in_array($s, mo_mqtt_zustaende(), true)
         || in_array($s, mo_mqtt_messwerte(), true)
+        || in_array($s, mo_mqtt_dienst(), true)
         || $s === 'ts' || $s === 'zaehler'
         || strpos($s, 'status/') === 0;
 }
@@ -1489,7 +1681,10 @@ function mo_mqtt_publish($st = null, $dev = 1) {
     $wurzel = mo_mqtt_praefix($cfg['mqtt_topic']);
     $prefix = $wurzel;
     if ((int) $dev > 1) { $prefix .= '/' . (int) $dev; }
-    $m = array('ok' => $st['ok'], 'code' => $st['code'], 'status' => mo_mqtt_status($st), 'modus' => $st['modus'],
+    $m = array('ok' => $st['ok'], 'code' => $st['code'], 'status' => mo_mqtt_status($st),
+               /* Der Geraeteteil von status, retained (mo_mqtt_dienst()). */
+               'maeherstatus' => mo_status_text((int) $st['code']),
+               'modus' => $st['modus'],
                'batterie' => $st['batterie'], 'maeht' => $st['maeht'], 'laedt' => $st['laedt'],
                'fehler' => $st['fehler'], 'stunden' => $st['stunden'], 'dauer' => $st['dauer'],
                'messer_rest' => $st['messer_rest'], 'messer_warn' => $st['messer_warn'],
@@ -1507,10 +1702,33 @@ function mo_mqtt_publish($st = null, $dev = 1) {
      * Thema sind eine Quelle zu viel; dieser hier faellt weg. Ueber HTTP
      * bleiben die Felder TS und ZAEHLER unveraendert (mo_werte()). */
     unset($m['ts'], $m['zaehler']);
+    /* Antwortet der Maeher nicht, gehen seine Zustandsthemen mit ihren
+     * Platzhaltern FLUECHTIG hinaus - im Broker bleibt der zuletzt gemessene
+     * Stand (mo_mqtt_nur_bei_antwort()); maeherstatus geht gar nicht. */
+    $fluechtig = array();
+    if (empty($st['ok'])) {
+        unset($m['maeherstatus']);
+        $fluechtig = array_flip(mo_mqtt_nur_bei_antwort());
+    }
 
+    /* Die Altwerte, die der Broker noch haelt (oder alle, wenn er nicht zu
+     * fragen war), bekommen eine leere retain-Nutzlast UNMITTELBAR vor ihrem
+     * gueltigen Wert - im selben Versand, als Nachbarzeile. Jedes der vier
+     * Altthemen hat in jedem Vollversand einen Wert (ok und status aus
+     * mo_state(), ann und ptest aus mo_meldeflags()); eine leere Nachricht
+     * ohne Wert dahinter entsteht hier also nicht. */
+    $weg = array_flip(mo_mqtt_altlast($prefix, (int) $dev)['themen']);
     $zeilen = array();
     foreach ($m as $k => $v) {
-        $zeilen[] = mo_mqtt_zeile($prefix . '/' . $k, $k, $v);
+        if (isset($weg[$k])) {
+            /* Ein Leerzeichen hinter dem Thema, sonst keine Nutzlast: die
+             * Form, die das Gateway als Loeschung liest (Regeln/07,
+             * Nachtrag 19.09.2026: mqttgateway.pl:281, :311-315, :357). */
+            $zeilen[] = 'retain ' . $prefix . '/' . $k . ' ';
+        }
+        $zeilen[] = isset($fluechtig[$k])
+            ? 'publish ' . $prefix . '/' . $k . ' ' . mo_zeile_saeubern($v)
+            : mo_mqtt_zeile($prefix . '/' . $k, $k, $v);
     }
 
     /* ==============================================================
@@ -1587,6 +1805,367 @@ function mo_mqtt_lebenszeichen()
         $zeilen[] = 'publish ' . $mo_pre . '/zaehler ' . (int) $lauf['zaehler'];
     }
     return mo_mqtt_senden($udp, $zeilen);
+}
+
+/* ==================================================================
+ * Nachlese 25.09.2026 - Altwerte abraeumen, NACHGELESEN beim Broker
+ * ==================================================================
+ *
+ * Eine Umstellung von retain auf publish loescht nichts: der alte Wert steht
+ * im Broker weiter und wird nach jedem Neustart von Broker oder Gateway
+ * wieder ausgeliefert. Abgeraeumt wird mit einer leeren retain-Nutzlast
+ * ueber den UDP-Eingang des Gateways - und dort meldet fwrite() auch fuer ein
+ * verworfenes Datagramm Erfolg (Regeln/07, "Ein Absender merkt nichts
+ * davon", am Geraet belegt: der Eingang verwirft unter Last bis ~70 %).
+ * Belegt ist das Abraeumen deshalb erst, wenn der Broker selbst sagt, dass
+ * nichts mehr dasteht; erst dann entsteht ein Merker. Bauart
+ * bw_mqtt_behalten_liste()/bw_mqtt_altlast() (Beschattungswaechter 0.9.21),
+ * dort aus Spotpreis-Tibber 0.9.19.
+ * ================================================================== */
+
+/** Die Themen (ohne Praefix), die 1.1.6 bis 1.1.12 retained sendeten und die
+ *  jetzt fluechtig gehen - mo_mqtt_dienst(). */
+function mo_mqtt_altlast_liste()
+{
+    return mo_mqtt_dienst();
+}
+
+/** Der UDP-Eingangsport des Gateways aus der general.json, 0 = keiner. */
+function mo_mqtt_udpport()
+{
+    $p = mo_paths();
+    if ($p['lbhome'] === '') { return 0; }
+    $gen = @json_decode((string) @file_get_contents($p['lbhome'] . '/config/system/general.json'), true);
+    $udp = 0;
+    if (isset($gen['Mqtt']['Udpinport'])) { $udp = (int) $gen['Mqtt']['Udpinport']; }
+    if (!$udp && isset($gen['mqtt']['udpinport'])) { $udp = (int) $gen['mqtt']['udpinport']; }
+    return $udp;
+}
+
+/**
+ * Den Broker fragen, welche der Themen $themen er zurueckbehaelt - in EINER
+ * Verbindung, ein SUBSCRIBE mit allen Filtern.
+ *
+ * Rueckgabe array('lage' => 'ok'|'unbekannt', 'belegt' => array(thema => true)).
+ * 'ok' heisst: der Broker hat die Anmeldung (CONNACK 0) und JEDEN Filter
+ * (SUBACK-Rueckgabe unter 0x80) bestaetigt; was dann nicht unter 'belegt'
+ * steht, ist leer. 'unbekannt': er war nicht zu fragen (keine Wurzel, keine
+ * general.json, keine Verbindung, Anmeldung abgewiesen, Filter abgelehnt,
+ * keine Antwort) - das heisst NIE "nichts belegt" und fuehrt nie zu einem
+ * Merker (Muster 11 der Nachlese; in WSL gemessen,
+ * Pruefung-Robonect-1.1.12, Faelle R8, R9).
+ *
+ * MQTT 3.1.1 von Hand, nur CONNECT, SUBSCRIBE (QoS 0) und DISCONNECT - ohne
+ * fremde Bibliothek. Belegt ist ein Thema nur am EMPFANGENEN Paket mit
+ * Retain-Merkmal und nicht leerer Nutzlast. Die Anmeldung nimmt Brokeruser
+ * und Brokerpass aus der general.json (Regeln/07, Abschnitt 2); das Kennwort
+ * steht nur im CONNECT-Paket, nie in einem Protokoll und nie auf einer
+ * Kommandozeile.
+ */
+function mo_mqtt_behalten_liste(array $themen)
+{
+    $aus = array('lage' => 'unbekannt', 'belegt' => array());
+    $soll = array();
+    foreach ($themen as $t) {
+        if ((string) $t !== '') { $soll[(string) $t] = true; }
+    }
+    if (!$soll) {
+        $aus['lage'] = 'ok';
+        return $aus;
+    }
+    $p = mo_paths();
+    if ($p['lbhome'] === '') { return $aus; }
+    $d = @json_decode((string) @file_get_contents(
+             $p['lbhome'] . '/config/system/general.json'), true);
+    if (!is_array($d) || !isset($d['Mqtt']) || !is_array($d['Mqtt'])) { return $aus; }
+    $m = $d['Mqtt'];
+    $hol = function ($k) use ($m) {
+        return (isset($m[$k]) && is_scalar($m[$k])) ? (string) $m[$k] : '';
+    };
+    $host = trim($hol('Brokerhost'));
+    if ($host === '' || $host === 'localhost') { $host = '127.0.0.1'; }
+    $port = (int) $hol('Brokerport');
+    if ($port <= 0 || $port > 65535) { $port = 1883; }
+    $benutzer = $hol('Brokeruser');
+    $kennwort = $hol('Brokerpass');
+
+    $errno = 0;
+    $errstr = '';
+    $s = @stream_socket_client('tcp://' . $host . ':' . $port, $errno, $errstr, 2);
+    if (!$s) { return $aus; }
+    stream_set_timeout($s, 1);
+
+    $zk = function ($t) { return pack('n', strlen($t)) . $t; };
+    $laenge = function ($n) {
+        $o = '';
+        do {
+            $b = $n % 128;
+            $n = intdiv($n, 128);
+            if ($n > 0) { $b |= 128; }
+            $o .= chr($b);
+        } while ($n > 0);
+        return $o;
+    };
+    /* Genau $n Bytes lesen oder null - bei Zeitablauf und Verbindungsende. */
+    $lies = function ($n) use ($s) {
+        $d = '';
+        while (strlen($d) < $n) {
+            $t = @fread($s, $n - strlen($d));
+            if ($t === false || $t === '') {
+                $meta = stream_get_meta_data($s);
+                if (!empty($meta['timed_out']) || !empty($meta['eof']) || feof($s)) { return null; }
+                continue;
+            }
+            $d .= $t;
+        }
+        return $d;
+    };
+    /* Ein Paket: array(kopfbyte, rumpf) oder null. */
+    $paket = function () use ($lies) {
+        $k = $lies(1);
+        if ($k === null) { return null; }
+        $n = 0;
+        $mult = 1;
+        for ($i = 0; $i < 4; $i++) {
+            $b = $lies(1);
+            if ($b === null) { return null; }
+            $n += (ord($b) & 127) * $mult;
+            $mult *= 128;
+            if (!(ord($b) & 128)) { break; }
+        }
+        $r = ($n > 0) ? $lies($n) : '';
+        return ($r === null) ? null : array(ord($k), $r);
+    };
+
+    $flags = 0x02;                                  // saubere Sitzung
+    $nutz = $zk('morueck' . getmypid());
+    if ($benutzer !== '') {
+        $flags |= 0x80;
+        // Ein Kennwort ohne Benutzer laesst MQTT 3.1.1 nicht zu.
+        if ($kennwort !== '') { $flags |= 0x40; }
+    }
+    $kopf = $zk('MQTT') . chr(4) . chr($flags) . pack('n', 10);
+    if ($benutzer !== '') {
+        $nutz .= $zk($benutzer);
+        if ($kennwort !== '') { $nutz .= $zk($kennwort); }
+    }
+    if (@fwrite($s, chr(0x10) . $laenge(strlen($kopf . $nutz)) . $kopf . $nutz) !== false) {
+        $ack = $paket();
+        if ($ack !== null && ($ack[0] >> 4) === 2 && strlen($ack[1]) >= 2 && ord($ack[1][1]) === 0) {
+            $sub = pack('n', 1);
+            foreach (array_keys($soll) as $t) { $sub .= $zk($t) . chr(0); }
+            @fwrite($s, chr(0x82) . $laenge(strlen($sub)) . $sub);
+            $bestaetigt = false;
+            $abgelehnt = false;
+            $ende = microtime(true) + 3.0;
+            while (microtime(true) < $ende) {
+                $pk = $paket();
+                if ($pk === null) { break; }           // Zeitablauf: nichts mehr gekommen
+                $art = $pk[0] >> 4;
+                if ($art === 9) {
+                    /* Je Filter ein Rueckgabebyte hinter der Paketkennung;
+                       0x80 heisst abgelehnt. */
+                    $rc = (string) substr($pk[1], 2);
+                    if (strlen($rc) !== count($soll)) { $abgelehnt = true; }
+                    for ($i = 0; $i < strlen($rc); $i++) {
+                        if (ord($rc[$i]) >= 0x80) { $abgelehnt = true; }
+                    }
+                    if ($abgelehnt) { break; }
+                    $bestaetigt = true;
+                    // Zurueckbehaltenes kommt unmittelbar nach dem SUBACK.
+                    $ende = min($ende, microtime(true) + 1.0);
+                } elseif ($art === 3 && strlen($pk[1]) >= 2) {
+                    $tl = unpack('n', substr($pk[1], 0, 2));
+                    $t = substr($pk[1], 2, $tl[1]);
+                    $versatz = 2 + $tl[1] + ((($pk[0] >> 1) & 3) > 0 ? 2 : 0);
+                    $wert = (string) substr($pk[1], $versatz);
+                    // Am empfangenen Paket: nur mit gesetztem Retain-Merkmal.
+                    if (isset($soll[$t]) && ($pk[0] & 1) && $wert !== '') {
+                        $aus['belegt'][$t] = true;
+                        if (count($aus['belegt']) === count($soll)) { break; }
+                    }
+                }
+            }
+            if ($bestaetigt && !$abgelehnt) {
+                $aus['lage'] = 'ok';
+            } else {
+                $aus['belegt'] = array();
+            }
+        }
+        @fwrite($s, chr(0xE0) . chr(0));
+    }
+    fclose($s);
+    return $aus;
+}
+
+/**
+ * Welche Altwerte muessen in diesem Vollversand unter $praefix noch
+ * abgeraeumt werden?
+ *
+ * Rueckgabe array('lage' => 'erledigt'|'belegt'|'unbekannt',
+ *                 'themen' => array(<thema ohne praefix>, ...)).
+ *
+ * Je Vollversand, bis der Merker liegt: den Broker nach allen Themen aus
+ * mo_mqtt_altlast_liste() fragen; keines belegt -> Merker schreiben, nichts
+ * abraeumen ('erledigt'); einige belegt -> genau diese ('belegt'), kein
+ * Merker, der naechste Vollversand fragt wieder; nicht zu fragen -> alle
+ * ('unbekannt'), KEIN Merker - dann raeumt jeder Vollversand ab. Der Merker
+ * entsteht NUR aus der Antwort des Brokers, nie aus dem Senden.
+ *
+ * Der Merker liegt je Maeher im Datenordner (mqtt_altlast_<N>) und traegt
+ * die Kennung "leer-bestaetigt <praefix>: <Themenliste>": ein anderes
+ * Praefix oder eine andere Liste gilt nicht (Fall R10). purge_installation
+ * raeumt ihn bei jedem Update mit ab; dann wird einmal nachgefragt.
+ *
+ * Der unangemeldete Endpunkt (mo_nur_lesen()) raeumt ab, schreibt aber
+ * keinen Merker (Fall R12).
+ */
+function mo_mqtt_altlast($praefix, $dev = 1)
+{
+    $praefix = (string) $praefix;
+    $liste = mo_mqtt_altlast_liste();
+    $p = mo_paths();
+    $merker = $p['datadir'] . '/mqtt_altlast_' . max(1, (int) $dev);
+    $kennung = 'leer-bestaetigt ' . $praefix . ': ' . implode(' ', $liste);
+    if (is_file($merker) && trim((string) @file_get_contents($merker)) === $kennung) {
+        return array('lage' => 'erledigt', 'themen' => array());
+    }
+    $voll = array();
+    foreach ($liste as $t) { $voll[] = $praefix . '/' . $t; }
+    $f = mo_mqtt_behalten_liste($voll);
+    if ($f['lage'] === 'ok' && !$f['belegt']) {
+        if (!mo_nur_lesen()) {
+            if (!is_dir($p['datadir'])) { @mkdir($p['datadir'], 0775, true); }
+            if (@file_put_contents($merker, $kennung . "\n") !== false) {
+                mo_log('MQTT: unter ' . $praefix . '/ steht keiner der frueher zurueckbehaltenen Werte '
+                    . 'mehr im Broker (' . implode(', ', $liste) . '; vom Broker bestaetigt).');
+            }
+        }
+        return array('lage' => 'erledigt', 'themen' => array());
+    }
+    if ($f['lage'] === 'ok') {
+        $l = strlen($praefix) + 1;
+        $t = array();
+        foreach (array_keys($f['belegt']) as $v) { $t[] = substr($v, $l); }
+        mo_log_if_changed('altlast_belegt_' . (int) $dev, 'MQTT: im Broker stehen noch zurueckbehaltene '
+            . 'Altwerte unter ' . $praefix . '/ (' . implode(', ', $t) . ') - sie gehen mit leerer '
+            . 'Nutzlast unmittelbar vor dem gueltigen Wert hinaus; der naechste Vollversand fragt wieder nach.');
+        return array('lage' => 'belegt', 'themen' => $t);
+    }
+    mo_log_if_changed('altlast_unbekannt_' . (int) $dev, 'MQTT: der Broker liess sich nicht befragen '
+        . '(Brokerhost, Brokerport und Zugangsdaten in general.json) - die frueher zurueckbehaltenen '
+        . 'Werte unter ' . $praefix . '/ (' . implode(', ', $liste) . ') gehen deshalb in jedem '
+        . 'Vollversand mit leerer Nutzlast unmittelbar vor dem gueltigen Wert hinaus. Siehe README.',
+        '', 86400);
+    return array('lage' => 'unbekannt', 'themen' => $liste);
+}
+
+/**
+ * Die Themen (ohne Praefix), die die Deinstallation leert: jedes, das eine
+ * veroeffentlichte Fassung je retained gesendet hat - die Zustaende von heute
+ * und die Altwerte. Was nie retained ging (status/ts, status/zaehler,
+ * status/ok, ts, zaehler und die Messwerte), bleibt unberuehrt: eine leere
+ * Nachricht darauf loeschte nichts, kaeme aber am Miniserver als leerer Wert
+ * an.
+ */
+function mo_mqtt_leer_themen()
+{
+    $t = mo_mqtt_zustaende();
+    foreach (mo_mqtt_altlast_liste() as $k) {
+        if (!in_array($k, $t, true)) { $t[] = $k; }
+    }
+    return $t;
+}
+
+/**
+ * Die zurueckbehaltenen Themen der Linie leeren - fuer uninstall/uninstall
+ * (cron.php --mqtt-leeren). Schreibt kein Protokoll, keinen Zwischenspeicher
+ * und legt nichts an: es laeuft als root.
+ *
+ * Unter dem eingestellten Praefix und fuer alle neun Maeher (auch fuer
+ * entfernte - ihre Werte stehen sonst fuer immer im Broker). Geloescht wird
+ * ueber den UDP-Eingang des Gateways, "retain <thema> " mit leerer Nutzlast.
+ * VOR der ersten Runde und nach jeder wird der Broker gefragt; hinaus geht
+ * nur, was dort noch steht, hoechstens $runden Runden. Ist der Broker nicht
+ * zu fragen, gehen alle Themen in jeder Runde hinaus, und die Ausgabe sagt,
+ * dass nicht nachgelesen wurde. Bauart bw_mqtt_leeren() (Beschattungswaechter
+ * 0.9.21).
+ *
+ * Rueckgabe 0 geleert oder nicht nachpruefbar, 1 es steht noch etwas bzw.
+ * der Eingang war nicht erreichbar, 2 nicht moeglich.
+ */
+function mo_mqtt_leeren($runden = 3, $pause_us = 1000000)
+{
+    $z = null;
+    $c = mo_config($z, false);
+    $w = mo_mqtt_praefix(isset($c['mqtt_topic']) ? $c['mqtt_topic'] : '');
+    $udp = mo_mqtt_udpport();
+    if (!$udp) {
+        echo '<INFO> MQTT: in der general.json steht kein UDP-Eingangsport des Gateways - '
+           . 'zurueckbehaltene Themen unter ' . $w . '/ wurden nicht geleert.' . "\n";
+        return 2;
+    }
+    $alle = array();
+    for ($n = 1; $n <= mo_max_maeher(); $n++) {
+        $pre = $w . ($n > 1 ? '/' . $n : '');
+        foreach (mo_mqtt_leer_themen() as $t) { $alle[] = $pre . '/' . $t; }
+    }
+    $zahl = count($alle);
+    $f = mo_mqtt_behalten_liste($alle);
+    $nachgelesen = ($f['lage'] === 'ok');
+    $offen = $nachgelesen ? array_keys($f['belegt']) : $alle;
+    if ($nachgelesen && !$offen) {
+        echo '<OK> MQTT: der Broker bestaetigt: keines der ' . $zahl . ' Themen unter ' . $w
+           . '/ steht zurueckbehalten - nichts zu leeren.' . "\n";
+        return 0;
+    }
+    $eno = 0;
+    $etxt = '';
+    $fp = @stream_socket_client('udp://127.0.0.1:' . (int) $udp, $eno, $etxt, 2);
+    if (!$fp) {
+        echo '<WARNING> MQTT: der UDP-Eingang des Gateways ist nicht erreichbar (Port '
+           . (int) $udp . ') - zurueckbehaltene Themen unter ' . $w . '/ wurden nicht geleert.' . "\n";
+        return 1;
+    }
+    $zu_leeren = count($offen);
+    $datagramme = 0;
+    $gelaufen = 0;
+    for ($r = 1; $r <= max(1, (int) $runden) && $offen; $r++) {
+        if ($r > 1) { usleep((int) $pause_us); }
+        $gelaufen = $r;
+        foreach ($offen as $t) {
+            // Ein Leerzeichen hinter dem Thema, sonst keine Nutzlast: die
+            // Form, die das Gateway als Loeschung liest.
+            if (@fwrite($fp, 'retain ' . $t . ' ') !== false) { $datagramme++; }
+        }
+        usleep(300000);     // dem Gateway Zeit bis zum Broker lassen
+        $f = mo_mqtt_behalten_liste($offen);
+        if ($f['lage'] === 'ok') {
+            $nachgelesen = true;
+            $offen = array_keys($f['belegt']);
+        } else {
+            $nachgelesen = false;
+        }
+    }
+    fclose($fp);
+    echo '<INFO> MQTT: ' . $zu_leeren . ' von ' . $zahl . ' Themen unter ' . $w . '/ mit leerer Nutzlast '
+       . 'an den UDP-Eingang ' . (int) $udp . ' des Gateways gesendet (' . $gelaufen
+       . ' Runde(n), ' . $datagramme . ' Datagramme).' . "\n";
+    if ($nachgelesen && !$offen) {
+        echo '<OK> MQTT: der Broker bestaetigt: keines der ' . $zahl . ' Themen steht mehr '
+           . 'zurueckbehalten.' . "\n";
+        return 0;
+    }
+    if ($nachgelesen) {
+        echo '<WARNING> MQTT: ' . count($offen) . ' Themen stehen noch zurueckbehalten im Broker ('
+           . implode(', ', array_slice($offen, 0, 5)) . (count($offen) > 5 ? ', ...' : '')
+           . '). Von Hand: mosquitto_pub -r -n -t <thema> (mit den Broker-Zugangsdaten).' . "\n";
+        return 1;
+    }
+    echo '<INFO> MQTT: der Broker liess sich nicht befragen - nicht nachgelesen. Der UDP-Eingang '
+       . 'verwirft unter Last Datagramme; was stehen bleibt, laesst sich mit '
+       . 'mosquitto_pub -r -n -t <thema> von Hand loeschen.' . "\n";
+    return 0;
 }
 
 /* ==================================================================
@@ -1990,18 +2569,20 @@ function mo_t($schluessel)
 {
     static $texte = null;
     if ($texte === null) {
-        // Installiert liegen die Dateien unter
-        // <home>/templates/plugins/<ordner>/lang/ - der Ordnername ergibt
-        // sich aus dem Ablageort dieser Datei.
-        $home = getenv('LBHOMEDIR');
-        if (!$home || !is_dir($home)) {
-            foreach (array(lb_wurzel_ermitteln(), '/home/loxberry/loxberry') as $k) {
-                if (is_dir($k)) { $home = $k; break; }
-            }
+        /* Installiert liegen die Dateien unter
+         * <home>/templates/plugins/<ordner>/lang/. Wurzel und Ordner kommen
+         * aus mo_paths() - ohne festen Standardort dahinter und ohne Pfad ab
+         * der Laufwerkswurzel. Bis 1.1.12 folgte hier auf die Suche der
+         * feste Pfad des Heimatverzeichnisses von loxberry, und ohne Wurzel
+         * wurde /templates/plugins/html/lang ab / abgefragt (in WSL gemessen,
+         * Pruefung-Robonect-1.1.12, Faelle W1, W2; Bauart zd_t(),
+         * ZendureSolarFlow 0.9.26). Ohne Wurzel NUR die eigenen Dateien. */
+        $p = mo_paths();
+        $pfad = '';
+        if ($p['lbhome'] !== '' && is_dir($p['lbhome'] . '/templates/plugins/' . $p['plugin'] . '/lang')) {
+            $pfad = $p['lbhome'] . '/templates/plugins/' . $p['plugin'] . '/lang';
         }
-        $ordner = basename(dirname(__FILE__));
-        $pfad = $home . '/templates/plugins/' . $ordner . '/lang';
-        if (!is_dir($pfad)) {
+        if ($pfad === '') {
             // Nicht installiert (Entwicklung): neben dem Plugin nachsehen.
             $pfad = dirname(dirname(dirname(__FILE__))) . '/templates/lang';
         }
@@ -2224,9 +2805,11 @@ function mo_x($s) {
  * ================================================================== */
 function mo_mqtt_gateway_info() {
     $p = mo_paths();
-    /* Kein fest verdrahteter Systempfad mehr: lb_wurzel_ermitteln() steht
-     * zwei Funktionen weiter oben und trifft auch eine Installation, die
-     * nicht unter /opt/loxberry liegt. */
+    /* Kein fest verdrahteter Systempfad mehr: die Wurzel kommt aus
+     * mo_paths() (mo_lbhome(), lb_wurzel_ermitteln()) und trifft auch eine
+     * Installation, die nicht am Standardort liegt. Der Standardort selbst
+     * steht hier seit 1.1.12 nicht mehr: der Pluginpruefer sucht die
+     * Zeichenkette auch in Kommentaren (Regeln/06). */
     $home = isset($p['lbhome']) && $p['lbhome'] !== '' ? $p['lbhome'] : '';
     if ($home === '') { return null; }
     $gj = $home . '/config/system/general.json';

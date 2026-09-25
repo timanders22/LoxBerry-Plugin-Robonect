@@ -1,6 +1,48 @@
 #!/bin/bash
 ARGV1=$1; ARGV3=$3; ARGV5=$5; ARGV6=$6
-PFOLDER="${ARGV3:-robonect}"; BASE="${ARGV5:-$LBHOMEDIR}"
+PFOLDER="${ARGV3:-robonect}"
+# ------------------------------------------------------------------
+# Die Wurzel: GELESEN, nicht geraten (Nachlese 25.09.2026).
+# ------------------------------------------------------------------
+# Bis 1.1.12 stand hier nur BASE="${5:-$LBHOMEDIR}", ohne Pruefung. Fehlten
+# beide, arbeitete das Skript gegen /config/plugins/... und /data/plugins/...
+# ab der Laufwerkswurzel (in WSL gemessen, Pruefung-Robonect-1.1.12, Fall W7:
+# mkdir, cp und chmod auf Pfade ab /). Eine LoxBerry-Wurzel traegt
+# config/plugins, data/plugins und config/system/general.json (Regeln/06).
+# Ohne Wurzel: <WARNING>, nichts anlegen, nichts kopieren, Rueckgabe 1.
+# Wortgleich in preupgrade.sh, postinstall.sh und postupgrade.sh; Bauart
+# sk_wurzel_suchen() (Skoda-Connect-NG 0.9.24).
+mo_wurzel_suchen() {
+    mo_v=$(cd "$(dirname "$(readlink -f "$0")")" 2>/dev/null && pwd -P)
+    mo_i=0
+    while [ -n "$mo_v" ] && [ "$mo_v" != "/" ] && [ "$mo_i" -lt 8 ]; do
+        if [ -d "$mo_v/config/plugins" ] && [ -d "$mo_v/data/plugins" ] \
+           && [ -f "$mo_v/config/system/general.json" ]; then
+            echo "$mo_v"
+            return 0
+        fi
+        mo_v=$(dirname "$mo_v")
+        mo_i=$((mo_i + 1))
+    done
+    return 1
+}
+BASE="${ARGV5:-}"
+if [ -z "$BASE" ] || [ ! -d "$BASE" ]; then
+    if [ -n "${LBHOMEDIR:-}" ] && [ -d "$LBHOMEDIR/config/plugins" ] \
+       && [ -d "$LBHOMEDIR/data/plugins" ]; then
+        BASE="$LBHOMEDIR"
+    else
+        BASE=$(mo_wurzel_suchen) || BASE=""
+    fi
+fi
+if [ -z "$BASE" ] || [ ! -d "$BASE/config/plugins" ] || [ ! -d "$BASE/data/plugins" ]; then
+    echo "<WARNING> Das Wurzelverzeichnis des LoxBerry liess sich nicht bestimmen: weder"
+    echo "<WARNING> das fuenfte Argument noch \$LBHOMEDIR noch der eigene Ablageort fuehrten"
+    echo "<WARNING> auf einen Ordner mit config/plugins und data/plugins."
+    echo "<WARNING> Es wurde nichts angelegt, gesichert oder zurueckgespielt."
+    exit 1
+fi
+MARKE="$BASE/data/plugins/$PFOLDER.upgrade_laeuft"
 WORK="${ARGV6:-$ARGV1}"
 mkdir -p "$BASE/config/plugins/$PFOLDER" "$BASE/data/plugins/$PFOLDER" 2>/dev/null
 CF="$BASE/config/plugins/$PFOLDER/mower.json"
@@ -111,6 +153,14 @@ mo_zweitschrift_holen() {
 # Aktualisierung (plugininstall.pl:845).
 AKT=0
 [ -f "$WORK/.aktualisierung" ] && AKT=1
+
+# Nachlese 25.09.2026: eine Neuinstallation braucht keine Upgrade-Marke. Liegt
+# eine, stammt sie aus einem abgebrochenen Update und setzte den Minutentakt
+# bis zu einer Stunde aus (Pruefung-Robonect-1.1.12, Fall L6). Beim Update
+# bleibt sie liegen, bis postupgrade.sh zurueckgespielt hat.
+if [ "$AKT" = "0" ] && [ -e "$MARKE" ]; then
+    rm -f "$MARKE" && echo "<INFO> Eine liegengebliebene Upgrade-Marke wurde entfernt: $(basename "$MARKE")"
+fi
 
 MO_GEHOLT=0; MO_WARN=0
 mo_zweitschrift_holen

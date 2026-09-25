@@ -12,6 +12,93 @@ Zugangsdaten lokal (Dateirechte 0600, HTTP-Basic-Auth) — Loxone ruft nur noch
 
 Kompatibel mit LoxBerry 3.x und **LoxBerry 4** (reines PHP, PHP 7.4 und 8.x).
 
+## Neu in 1.1.12
+
+**Ein Update verliert keine Laufdaten mehr.** Zwischen dem Abräumen der alten
+Installation und `postupgrade.sh` liegt fast eine Minute, in der der Minutentakt
+schon mit den neuen Dateien läuft. Lief er dort, schrieb er in den gerade
+geleerten Datenordner ein frisches `lauf.json` (Laufzähler 1), eine
+`fehler.json` mit nur dem neuen Eintrag und eine `statistik.json` mit nur dem
+neuen Einsatz — und `postupgrade.sh` spielte die Rettung nicht zurück, weil schon
+Dateien dalagen. Nachgestellt: Zähler 500 → 1, fünf gespeicherte Fehler → 1,
+drei Einsätze des Tages → 1; weil der Takt in der Lücke den Fehler und das
+Mähende schon „gesehen" hatte, erkannte auch der nächste Lauf sie nicht mehr.
+Jetzt legt `preupgrade.sh` als Erstes die Marke
+`data/plugins/<ordner>.upgrade_laeuft` (Unixzeit) an, und `cron.php` setzt aus,
+solange sie gilt (höchstens 3600 s alt, bis 300 s „aus der Zukunft", Inhalt als
+Zahl geprüft); `postupgrade.sh` räumt sie am Ende weg, auch bei einem Abbruch.
+Die Rettung wird **nach Inhalt** zurückgespielt: gültiges JSON ersetzt, was in
+der Lücke entstanden ist, eine unbrauchbare Rettung wird nicht eingespielt und
+mit `<WARNING>` genannt, und das Protokoll sagt, welche Dateien zurückkamen.
+
+**MQTT: was das Plugin über sich selbst sagt, geht nicht mehr zurückbehalten
+hinaus** (Hausregel seit 18./19.09.2026). Betroffen sind vier Themen je Mäher:
+
+| Thema | warum nicht mehr retained |
+|---|---|
+| `ok` | „Mäher beim letzten Messen erreichbar" — das Plugin schließt es aus seiner eigenen Abfrage. Stirbt der Cron, bliebe eine 1 stehen. |
+| `status` | Klartext; bei einem stummen Mäher steht dort, was **das Plugin** festgestellt hat („antwortet gerade nicht", „Benutzer oder Passwort stimmen nicht"). Die Bedeutung bleibt, das Thema geht flüchtig. |
+| `ann` | Meldefenster, fällt nach 10 Minuten von selbst auf 0. |
+| `ptest` | Test-Push, lebt 5 Minuten; zurückbehalten löste eine 1 nach jedem Neustart von Broker oder Gateway den Test erneut aus. |
+
+**Neu daneben, zurückbehalten: `maeherstatus`** — der Zustand als Klartext, wie
+der Mäher ihn meldet („parkt", „mäht" …), nur gesendet, wenn der Mäher
+geantwortet hat.
+
+**Antwortet der Mäher nicht, gehen seine Platzhalter flüchtig hinaus**
+(`code -1`, `modus -1`, `maeht 0`, `laedt 0`, `fehler 0`, `messer_warn 0`,
+`timer 0`). Bisher gingen sie zurückbehalten über den zuletzt gemessenen Stand
+— ein Mäher mit Fehler stand nach einem WLAN-Abriss im Broker mit „kein Fehler",
+auch nach einem Neustart des Gateways. Jetzt sieht Loxone `code -1` („keine
+Verbindung") live wie bisher, und der Broker behält den letzten echten
+Gerätestand. `maeherstatus` geht bei stummem Mäher gar nicht hinaus. **In Loxone
+ist nichts umzustellen:** wer am MQTT-Thema `code` auf `-1` prüft, bekommt es
+weiter. Über HTTP ändert sich nichts. Die Messwerte (`batterie`, `temperatur`,
+`wlan` …) gehen wie bisher flüchtig mit ihren Fehlwerten `-1` bzw. `-999` hinaus.
+
+**Alte zurückbehaltene Werte werden abgeräumt, nachgelesen beim Broker.** Vor
+einem Vollversand fragt das Plugin den Broker (Anmeldung mit `Brokeruser`/
+`Brokerpass` aus der `general.json`; das Kennwort steht nur im Anmeldepaket), ob
+unter `ok`, `status`, `ann` oder `ptest` noch ein Altwert steht; wenn ja, geht die
+leere Nutzlast unmittelbar vor dem gültigen Wert hinaus, und beim nächsten
+Vollversand wird wieder gefragt. Erst wenn der Broker „leer" meldet, entsteht
+der Merker `data/plugins/<ordner>/mqtt_altlast_<N>`. Weist der Broker die
+Anmeldung ab oder lehnt das Abonnement ab, gilt das als „nicht zu fragen", nie
+als „leer": dann wird bei **jedem** Vollversand abgeräumt, und es entsteht kein
+Merker. **Grenze:** der UDP-Eingang des Gateways verwirft unter Last
+Datagramme; ohne erreichbaren Broker lässt sich nicht bestätigen, dass ein
+Altwert fort ist. Was dann stehen bleibt, löscht
+`mosquitto_pub -r -n -t <thema>`.
+
+**Die Deinstallation leert die zurückbehaltenen Themen des Plugins** — unter
+dem eingestellten Präfix, für alle neun Mäher, höchstens drei Runden, jede vom
+Broker nachgelesen. Bisher stand dort nur der Hinweis, die Werte blieben stehen.
+
+**Ein ausgepacktes Archiv fasst die Anlage nicht mehr an.** Die Pfade der Anlage
+gelten nur, wenn die Bibliothek dort installiert liegt oder `LBHOMEDIR` **und**
+`LBPPLUGINDIR` gesetzt sind. Vorher zählte `cron.php` aus einem Archiv unterhalb
+von `<LoxBerry-Wurzel>` das `lauf.json` der Anlage hoch, fragte ihren Mäher und
+schrieb in ihren Zwischenspeicher; `mower.php` lieferte ihre Werte, und die
+Oberfläche lud mit `LBHOMEDIR` die Bibliothek der Anlage. Jetzt bleibt alles im
+eigenen Ordner, und `cron.php` steigt mit einer Meldung aus. `LBHOMEDIR` gilt nur
+noch, wenn darunter `config/plugins` und `data/plugins` liegen; die Sprachdateien
+fallen nicht mehr auf einen festen Standardort zurück und fragen ohne Wurzel
+keinen Pfad ab `/` mehr ab; `mo_fassung()` liest keine `plugin.cfg` außerhalb des
+Archivs mehr.
+
+**Die Installationsskripte tun ohne LoxBerry-Wurzel nichts.** `preupgrade.sh`,
+`postinstall.sh` und `postupgrade.sh` nahmen `BASE="${5:-$LBHOMEDIR}"` ohne
+Prüfung; fehlten beide, arbeiteten sie gegen `/config/plugins/…` und
+`/data/plugins/…`. Jetzt: fünftes Argument, `LBHOMEDIR`, sonst Suche nach
+`config/system/general.json` — ohne Treffer `<WARNING>` und Rückgabe 1.
+
+**Wertebereiche am Miniserver** stehen jetzt im Abschnitt unten — WLAN und
+Temperatur melden `-999`, wenn der Mäher nicht antwortet.
+
+Gemessen in WSL (Ubuntu, PHP 8.3, bash 5.2) mit 81 Prüfzeilen, vorher 55 rot,
+nachher 0; jede Behebung einzeln zurückgebaut und an ihren Zeilen rot. Nicht am
+Gerät gemessen.
+
 ## Neu in 1.1.11
 
 **Die Installationsskripte entscheiden nach Inhalt, nicht nach Größe — und
@@ -616,6 +703,47 @@ wird seit 1.1.4 mit HTTP 400 und `ERR=MEHRDEUTIG` abgewiesen. Bis 1.1.3 gewann
 stillschweigend das JSON, und der Befehl geschah nie.
 
 
+### Wertebereiche am Miniserver
+
+Einige Felder melden einen **Fehlwert**, wenn der Mäher nicht antwortet oder ein
+Wert nicht bekannt ist — und zwar einen, der als Messwert nicht vorkommen kann:
+eine 0 hieße bei `WLAN` „bestes Signal", bei `TEMP` „0 °C". Der virtuelle
+Eingang in Loxone Config muss diesen Fehlwert **zulassen**. Liegt ein Wert
+außerhalb von `MinVal`/`MaxVal`, meldet Loxone ihn als außerhalb des
+Wertebereichs und zeigt nicht den Fehlwert — an einer Anlage gelesen: ein
+Eingang für die WLAN-Signalstärke mit `MinVal -120` zeigte bei stummem Mäher 0,
+also „bestes Signal".
+
+Die Importvorlage aus dem Reiter *Einbindung in Loxone* setzt die Grenzen
+richtig. Wer Eingänge **von Hand** anlegt oder ältere hat — für die
+Befehlserkennung am virtuellen HTTP-Eingang wie für einen virtuellen Eingang
+hinter dem MQTT-Gateway —, stellt sie so ein:
+
+| Feld (HTTP) | MQTT-Thema | MinVal | MaxVal | Einheit | nicht bekannt / Mäher stumm |
+|---|---|---|---|---|---|
+| `OK` | `ok` | 0 | 1 | | 0 |
+| `CODE` | `code` | -1 | 99 | | -1 (über MQTT flüchtig) |
+| `MODUS` | `modus` | -1 | 99 | | -1 (über MQTT flüchtig) |
+| `BATT` | `batterie` | -1 | 100 | % | -1 |
+| `MAEHT`, `LAEDT`, `MESSERWARN`, `TIMER` | `maeht`, `laedt`, `messer_warn`, `timer` | 0 | 1 | | 0 (über MQTT flüchtig) |
+| `FEHLER` | `fehler` | 0 | 10000 | | 0 (über MQTT flüchtig) |
+| `STUNDEN` | `stunden` | 0 | 100000 | h | 0 |
+| `DAUER` | `dauer` | 0 | 10000 | min | 0 |
+| `MESSER` | `messer_rest` | -1 | 10000 | h | -1 |
+| **`TEMP`** | **`temperatur`** | **-999** | 80 | °C | **-999** |
+| `FEUCHTE` | `feuchte` | -1 | 100 | % | -1 |
+| **`WLAN`** | **`wlan`** | **-999** | **0** | dBm | **-999** |
+| `ANN`, `AUDIO`, `PUSH`, `PTEST` | `ann`, `audio`, `push`, `ptest` | 0 | 1 | | 0 |
+| `TS` | `ts` | 0 | 2000000000 | s | — |
+| `ZAEHLER` | `zaehler` | 0 | 999 | | — |
+| `FEHLERALTER` | `fehleralter` | -1 | 100000 | h | -1 (kein Fehler bekannt) |
+| `EINSHEUTE` / `MINHEUTE` | `einsheute` / `minheute` | 0 | 99 / 10000 | — / min | — |
+| `EINSWOCHE` / `MINWOCHE` | `einswoche` / `minwoche` | 0 | 999 / 100000 | — / min | — |
+
+Die letzten beiden Zeilen gibt es nur bei eingeschalteter Einsatzstatistik. Die
+Zahlen stehen im Plugin an einer Stelle (`mo_felder()` in `mower_lib.php`); die
+Importvorlage und die Beschriftungen im Reiter *Einbindung in Loxone* kommen aus derselben.
+
 ### Der Datenordner und die Zweitschrift
 
 `config/plugins/robonect/mower.json` wird bei **jedem** Update von LoxBerry
@@ -623,7 +751,9 @@ abgeräumt (`purge_installation`). Gerettet wird sie über `preupgrade.sh` und
 über die Zweitschrift `config/plugins/robonect.backup.json`, die **neben**
 dem Ordner liegt und deshalb überlebt. Dasselbe gilt für `lauf.json`,
 `fehler.json` und `statistik.json` im Datenordner; `endpunkt.json` wird
-bewusst nicht gerettet.
+bewusst nicht gerettet. Seit 1.1.12 setzt der Minutentakt aus, solange
+`data/plugins/robonect.upgrade_laeuft` gilt, und die Rettung wird nach
+Inhalt zurückgespielt (siehe *Neu in 1.1.12*).
 
 `cron.php` im selben Verzeichnis ist **kein** Endpunkt, sondern der minutliche
 Lauf. Er antwortet seit 1.1.4 nur noch auf der Kommandozeile; ein Aufruf über

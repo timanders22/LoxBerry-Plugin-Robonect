@@ -1,6 +1,52 @@
 #!/bin/bash
 ARGV1=$1; ARGV3=$3; ARGV5=$5; ARGV6=$6
-PFOLDER="${ARGV3:-robonect}"; BASE="${ARGV5:-$LBHOMEDIR}"
+PFOLDER="${ARGV3:-robonect}"
+# ------------------------------------------------------------------
+# Die Wurzel: GELESEN, nicht geraten (Nachlese 25.09.2026).
+# ------------------------------------------------------------------
+# Bis 1.1.12 stand hier nur BASE="${5:-$LBHOMEDIR}", ohne Pruefung. Fehlten
+# beide, arbeitete das Skript gegen /config/plugins/... und /data/plugins/...
+# ab der Laufwerkswurzel (in WSL gemessen, Pruefung-Robonect-1.1.12, Fall W7:
+# mkdir, cp und chmod auf Pfade ab /). Eine LoxBerry-Wurzel traegt
+# config/plugins, data/plugins und config/system/general.json (Regeln/06).
+# Ohne Wurzel: <WARNING>, nichts anlegen, nichts kopieren, Rueckgabe 1.
+# Wortgleich in preupgrade.sh, postinstall.sh und postupgrade.sh; Bauart
+# sk_wurzel_suchen() (Skoda-Connect-NG 0.9.24).
+mo_wurzel_suchen() {
+    mo_v=$(cd "$(dirname "$(readlink -f "$0")")" 2>/dev/null && pwd -P)
+    mo_i=0
+    while [ -n "$mo_v" ] && [ "$mo_v" != "/" ] && [ "$mo_i" -lt 8 ]; do
+        if [ -d "$mo_v/config/plugins" ] && [ -d "$mo_v/data/plugins" ] \
+           && [ -f "$mo_v/config/system/general.json" ]; then
+            echo "$mo_v"
+            return 0
+        fi
+        mo_v=$(dirname "$mo_v")
+        mo_i=$((mo_i + 1))
+    done
+    return 1
+}
+BASE="${ARGV5:-}"
+if [ -z "$BASE" ] || [ ! -d "$BASE" ]; then
+    if [ -n "${LBHOMEDIR:-}" ] && [ -d "$LBHOMEDIR/config/plugins" ] \
+       && [ -d "$LBHOMEDIR/data/plugins" ]; then
+        BASE="$LBHOMEDIR"
+    else
+        BASE=$(mo_wurzel_suchen) || BASE=""
+    fi
+fi
+if [ -z "$BASE" ] || [ ! -d "$BASE/config/plugins" ] || [ ! -d "$BASE/data/plugins" ]; then
+    echo "<WARNING> Das Wurzelverzeichnis des LoxBerry liess sich nicht bestimmen: weder"
+    echo "<WARNING> das fuenfte Argument noch \$LBHOMEDIR noch der eigene Ablageort fuehrten"
+    echo "<WARNING> auf einen Ordner mit config/plugins und data/plugins."
+    echo "<WARNING> Es wurde nichts angelegt, gesichert oder zurueckgespielt."
+    exit 1
+fi
+MARKE="$BASE/data/plugins/$PFOLDER.upgrade_laeuft"
+# Nachlese 25.09.2026: die Marke aus preupgrade.sh faellt am Ende dieses
+# Skripts, auch bei einem vorzeitigen Ausstieg (trap ... EXIT, Regeln/06).
+# Erst dann laeuft der Minutentakt wieder - nach der Rueckholung unten.
+trap 'rm -f "$MARKE"' EXIT
 WORK="${ARGV6:-$ARGV1}"     # sechstes Argument, siehe preupgrade.sh
 mkdir -p "$BASE/config/plugins/$PFOLDER" "$BASE/log/plugins/$PFOLDER" "$BASE/data/plugins/$PFOLDER" 2>/dev/null
 CF="$BASE/config/plugins/$PFOLDER/mower.json"
@@ -149,16 +195,67 @@ fi
 # Begruendung in preupgrade.sh.
 
 # Lebenszeichen, Fehlerhistorie und Einsatzstatistik zurueckstellen - siehe
-# die Begruendung in preupgrade.sh. Nur, was wirklich gesichert wurde: ein
-# fehlender Rueckstand ist der Normalfall bei einer Neuinstallation und kein
-# Fehler. Eine bereits vorhandene Datei wird nicht ueberschrieben.
+# die Begruendung in preupgrade.sh. Ein fehlender Rueckstand ist bei einer
+# Neuinstallation der Normalfall und kein Fehler.
 # A26: der Ordner heisst seit 1.1.6 "rettung"; "data" fasste der Installer
 # selbst an, und diese Schleife war dadurch toter Code.
+#
+# Nachlese 25.09.2026: nach INHALT, nicht nach Dasein. Bis 1.1.12 galt "eine
+# bereits vorhandene Datei wird nicht ueberschrieben": hatte der Minutentakt
+# in der Luecke eine frische lauf.json geschrieben (Zaehler 1), blieb die
+# gerettete (Zaehler 500) liegen; und eine abgeschnittene Rettung wurde
+# ungeprueft kopiert (in WSL gemessen, Pruefung-Robonect-1.1.12, Faelle L8,
+# L9). Die Rettung stammt aus DIESEM Update (preupgrade.sh eben) und ist der
+# vollstaendige Stand: traegt sie gueltiges JSON, ersetzt sie, was in der
+# Luecke entstand, und das Protokoll sagt es. Ungueltig: nicht einspielen,
+# melden. Die Marke (preupgrade.sh) haelt den Takt aus der Luecke heraus;
+# dieser Weg traegt auch, wenn sie fehlt.
+mo_json_inhalt() {   # $1 Datei -> 0 gueltiges JSON, 1 leer, 3 ungueltig, 2 kein php
+    [ -s "$1" ] || return 1
+    command -v php >/dev/null 2>&1 || return 2
+    php -r '
+        $t = trim((string) @file_get_contents($argv[1]));
+        if ($t === "") { exit(1); }
+        $d = json_decode($t, true);
+        exit(is_array($d) ? 0 : 3);
+    ' -- "$1" 2>/dev/null
+    mo_rc=$?
+    case "$mo_rc" in 0|1|3) return "$mo_rc" ;; esac
+    return 2
+}
+MO_GEHOLT_D=""; MO_ERSETZT_D=""
 for F in lauf.json fehler.json statistik.json; do
-    if [ -f "$WORK/rettung/$F" ] && [ ! -f "$BASE/data/plugins/$PFOLDER/$F" ]; then
-        cp -p "$WORK/rettung/$F" "$BASE/data/plugins/$PFOLDER/$F" 2>/dev/null
-    fi
+    Q="$WORK/rettung/$F"; ZIEL="$BASE/data/plugins/$PFOLDER/$F"
+    [ -f "$Q" ] || continue
+    mo_json_inhalt "$Q"
+    case "$?" in
+    0)
+        VORHER=0
+        if [ -e "$ZIEL" ] && ! cmp -s "$Q" "$ZIEL"; then VORHER=1; fi
+        if cp -p "$Q" "$ZIEL" 2>/dev/null && cmp -s "$Q" "$ZIEL"; then
+            MO_GEHOLT_D="$MO_GEHOLT_D $F"
+            [ "$VORHER" = 1 ] && MO_ERSETZT_D="$MO_ERSETZT_D $F"
+        else
+            MO_WARN=1
+            echo "<WARNING> $F liess sich nicht zurueckspielen; die Rettung liegt unter $Q"
+        fi
+        ;;
+    1)
+        : # leer gerettet - nichts zurueckzuspielen
+        ;;
+    3)
+        MO_WARN=1
+        echo "<WARNING> Die gerettete $F ist kein gueltiges JSON und wurde nicht zurueckgespielt."
+        ;;
+    *)
+        # Ohne php laeuft das Plugin ohnehin nicht: wie bisher nur, wenn am
+        # Ziel nichts liegt - und nichts zusichern.
+        [ -f "$ZIEL" ] || cp -p "$Q" "$ZIEL" 2>/dev/null
+        ;;
+    esac
 done
+[ -n "$MO_GEHOLT_D" ] && echo "<INFO> Zurueckgespielt aus der Sicherung von eben:$MO_GEHOLT_D"
+[ -n "$MO_ERSETZT_D" ] && echo "<INFO> Dabei ersetzt, was der Minutentakt waehrend der Installation neu angelegt hatte:$MO_ERSETZT_D"
 
 mo_zweitschrift_holen
 

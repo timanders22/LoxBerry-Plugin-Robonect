@@ -54,14 +54,24 @@ if ($mw_lbhome && is_dir($mw_lbhome . '/config/plugins/' . $mw_plugin) === false
 
 /* Die Bibliothek liegt unter webfrontend/html/, weil der Loxone-Endpunkt sie
  * ebenfalls braucht. Installiert sind html/ und htmlauth/ ZWEI GETRENNTE
- * BAEUME - ein require ueber '..' traefe nur das ausgepackte Archiv. Deshalb
- * eine Kandidatenliste, vom installierten Fall zum Archivfall. */
+ * BAEUME - ein require ueber '..' traefe nur das ausgepackte Archiv.
+ *
+ * Welche Lage gilt, entscheidet der eigene Ablageort, nicht die Reihenfolge
+ * der Versuche (Nachlese 25.09.2026): liegt diese Datei unter
+ * <Wurzel>/webfrontend/htmlauth/plugins/<ordner>, ist sie installiert, sonst
+ * liegt sie in einem ausgepackten Archiv. Bis 1.1.12 wurden drei Kandidaten
+ * der Reihe nach probiert - mit LBHOMEDIR zuerst die Bibliothek der ANLAGE
+ * (aus einem Archiv heraus lud die Oberflaeche damit fremden Code), danach
+ * <ueber dem Archiv>/html/plugins/htmlauth/mower_lib.php, also ausserhalb
+ * des Archivs, aus einem Archiv unter / ab der Laufwerkswurzel (in WSL
+ * gemessen, Pruefung-Robonect-1.1.12, Faelle W5, W6; Bauart Spotpreis-Tibber
+ * 0.9.19). */
 $mw_kandidaten = array();
-if ($mw_lbhome !== '') {
-    $mw_kandidaten[] = $mw_lbhome . '/webfrontend/html/plugins/' . $mw_plugin . '/mower_lib.php';
+if (basename(dirname(__DIR__)) === 'plugins' && basename(dirname(dirname(__DIR__))) === 'htmlauth') {
+    $mw_kandidaten[] = dirname(dirname(dirname(__DIR__))) . '/html/plugins/' . basename(__DIR__) . '/mower_lib.php';
+} else {
+    $mw_kandidaten[] = dirname(__DIR__) . '/html/mower_lib.php';
 }
-$mw_kandidaten[] = dirname(dirname(dirname(__DIR__))) . '/html/plugins/' . basename(__DIR__) . '/mower_lib.php';
-$mw_kandidaten[] = dirname(__DIR__) . '/html/mower_lib.php';
 $mw_lib = '';
 foreach ($mw_kandidaten as $mw_cand) {
     if (is_file($mw_cand)) { require_once $mw_cand; $mw_lib = $mw_cand; break; }
@@ -869,6 +879,8 @@ foreach ($mw_themen['maeher'] as $mw_th) {
     $mw_gross = isset($mw_karte[$mw_th]) ? $mw_karte[$mw_th] : strtoupper($mw_th);
     if ($mw_th === 'status') {
         $mw_bed = mo_t('TEXT.TH_STATUS');
+    } elseif ($mw_th === 'maeherstatus') {
+        $mw_bed = mo_t('TEXT.TH_MAEHERSTATUS');
     } elseif ($mw_gross !== '' && isset($mw_felder[$mw_gross])) {
         $mw_bed = mo_feld_text($mw_gross);
     } else {

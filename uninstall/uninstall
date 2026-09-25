@@ -15,6 +15,11 @@
 #      der Merker fuer "antwortet nicht". /tmp ist auf dem LoxBerry eine
 #      Ramdisk, der Ordner verschwindet also spaetestens beim naechsten
 #      Neustart - bis dahin stuende er aber da.
+#   3. data/plugins/<ordner>.upgrade_laeuft (Nachlese 25.09.2026)
+#      Die Marke aus preupgrade.sh, neben dem Datenordner. Bliebe sie nach
+#      einem abgebrochenen Update liegen, setzte sie bei einer
+#      Neuinstallation in derselben Stunde den Minutentakt aus.
+#   4. die retained MQTT-Themen der Linie im Broker (Nachlese 25.09.2026)
 
 PDIR=$3
 [ -n "$PDIR" ] || PDIR="robonect"
@@ -80,6 +85,25 @@ CF="$BASE/config/plugins/$PDIR/mower.json"
 # der ERSTEN Installation ab.
 TMP="/tmp/$PDIR"
 
+# Nachlese 25.09.2026: die retained MQTT-Themen der Linie leeren. Bis 1.1.12
+# stand hier nur ein Hinweis; die Werte blieben nach der Deinstallation im
+# Broker stehen (in WSL gemessen, Pruefung-Robonect-1.1.12, Fall U1).
+# cron.php --mqtt-leeren leert sie ueber den UDP-Eingang und liest beim
+# Broker nach (mo_mqtt_leeren()); es legt nichts an. VOR allem anderen:
+# Praefix und Port stehen in der Konfiguration, und LoxBerry entfernt
+# webfrontend/ erst nach diesem Skript.
+LAUF="$BASE/webfrontend/html/plugins/$PDIR/cron.php"
+if [ -f "$LAUF" ] && command -v php >/dev/null 2>&1; then
+    LBHOMEDIR="$BASE" LBPPLUGINDIR="$PDIR" php "$LAUF" --mqtt-leeren 2>&1
+else
+    echo "<INFO> cron.php oder php fehlt - zurueckbehaltene MQTT-Themen wurden nicht geleert."
+fi
+
+MARKE="$BASE/data/plugins/$PDIR.upgrade_laeuft"
+if [ -e "$MARKE" ]; then
+    rm -f "$MARKE" && echo "<OK> Upgrade-Marke entfernt: $PDIR.upgrade_laeuft"
+fi
+
 if [ -f "$BK" ]; then
     # Vor dem Loeschen ueberschreiben. Das ist KEINE Zusicherung, dass die
     # Bytes von der SD-Karte verschwinden (Journal, Wear-Levelling) - es
@@ -117,12 +141,7 @@ if [ -d "$TMP" ]; then
     rm -rf "$TMP" && echo "<OK> Zwischenspeicher $TMP entfernt."
 fi
 
-# A29: <WARNING> ist fuer Fehler AM PLUGIN reserviert (Regeln/06). Was im
-# fremden Broker liegenbleibt, ist ein Aufraeumhinweis - jede planmaessige,
-# fehlerfreie Deinstallation erzeugte hier bisher eine Warnung.
-echo "<INFO> Im MQTT-Broker koennen Werte stehen bleiben."
-echo "<INFO> Das Plugin veroeffentlicht unter dem eingestellten Themenpraefix"
-echo "<INFO> (Vorgabe: maeher/...). Seit 1.1.6 sind die Zustaende retained und"
-echo "<INFO> bleiben deshalb im Broker stehen. Zum Aufraeumen: LoxBerry ->"
-echo "<INFO> System -> MQTT Gateway."
+# A29: <WARNING> ist fuer Fehler AM PLUGIN reserviert (Regeln/06). Bis
+# 1.1.12 stand hier der Hinweis, retained Werte blieben im Broker stehen -
+# das Leeren oben ersetzt ihn; was es nicht bestaetigen konnte, sagt es dort.
 exit 0

@@ -43,6 +43,41 @@ if (PHP_SAPI !== 'cli') {
 }
 
 /* ==================================================================
+ * Nachlese 25.09.2026: drei Riegel VOR jeder Wirkung
+ * ================================================================== */
+
+/* 1. --mqtt-leeren: nur fuer uninstall/uninstall. Es laeuft als root und
+ *    darf deshalb nichts anlegen - kein Protokoll, keinen Zwischenspeicher,
+ *    keine Sperrdatei; der Riegel mo_nur_lesen() haelt auch mo_config()
+ *    davon ab, eine Konfiguration zu heilen (mo_mqtt_leeren()). */
+if (isset($argv[1]) && $argv[1] === '--mqtt-leeren') {
+    mo_nur_lesen(true);
+    if (mo_paths()['lbhome'] === '') {
+        echo '<INFO> MQTT: keine LoxBerry-Wurzel - zurueckbehaltene Themen wurden nicht geleert.' . "\n";
+        exit(0);
+    }
+    exit(mo_mqtt_leeren() === 1 ? 1 : 0);
+}
+
+/* 2. Ohne Wurzel, und aus einem Archiv, das nicht in der Anlage liegt,
+ *    nichts messen, nichts senden, nichts schreiben (mo_paths(),
+ *    Archivmodus). Bis 1.1.12 zaehlte ein cron.php aus einem Archiv unter
+ *    einer echten Wurzel das lauf.json der Anlage hoch und fragte ihren
+ *    Maeher (in WSL gemessen, Pruefung-Robonect-1.1.12, Fall W3). */
+mo_keine_wurzel_abbruch('cron.php');
+
+/* 3. Die Upgrade-Marke (mo_upgrade_marke_gilt()): solange die Installation
+ *    laeuft, setzt der Takt aus. Protokolliert wird ueber mo_log_roh():
+ *    mo_log() liest fuer die Kennwortmaskierung die Konfiguration, und die
+ *    wuerde mo_config() in der Luecke aus der Zweitschrift neu schreiben. */
+if (mo_upgrade_marke_gilt()) {
+    mo_log_roh('Cron: eine Aktualisierung laeuft (' . basename(mo_paths()['marke'])
+        . ') - dieser Lauf wird ausgesetzt.');
+    echo "SKIP;GRUND=AKTUALISIERUNG\n";
+    exit(0);
+}
+
+/* ==================================================================
  * EINE SPERRE, WEIL DIESER LAUF INS NETZ GEHT
  * ==================================================================
  *
