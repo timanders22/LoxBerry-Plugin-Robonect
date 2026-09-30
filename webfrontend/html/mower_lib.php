@@ -890,7 +890,7 @@ function mo_api_roh($cmd, $dev = 1, $extra = '', $tmo = 3) {
         $r = curl_exec($ch);
         $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
         if ($r === false) { $netzfehler = (string) curl_error($ch); }
-        curl_close($ch);
+        if (PHP_VERSION_ID < 80000) { curl_close($ch); }
     } else {
         /* Ohne curl: die Lesegrenze gilt weiterhin nur fuers Lesen, also
          * wird default_socket_timeout fuer die Dauer des Aufrufs gesetzt und
@@ -3361,7 +3361,7 @@ function mo_endpunkt_probe($frisch = false)
         curl_setopt($ch, CURLOPT_TIMEOUT, 5);
         $antwort = curl_exec($ch);
         $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
+        if (PHP_VERSION_ID < 80000) { curl_close($ch); }
     } else {
         /* Beim Bauen dieser Fassung aufgefallen: ohne curl derselbe Rueckfall
          * wie in mo_api_roh(). Fehlte er, meldete diese Zeile dauerhaft
