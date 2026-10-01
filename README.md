@@ -576,6 +576,16 @@ dabei; wer sie nirgends verdrahtet hatte, merkt nichts.
 HTTP 403 mit `SELFTEST;OK=0;ERR=TOKEN`. Es wird dabei nichts geschaltet und
 nichts angefahren. Hausstandard fuer alle Aktionsendpunkte.
 
+## Was 1.1.15 behebt
+
+Ansage-3: Ausgabe über Google-Lautsprecher. Gemessen an einer Attrappe und am echten Endpunkt aus Chromecast 4 Lox NG 1.3.16 (Dienst-Attrappe) unter PHP 7.4 und 8.5; die Ausgabe über Alexa NG und alle übrigen Ausgabearten messen vorher = nachher gleich. Nicht am Gerät, nicht an echten Lautsprechern.
+
+* **Neue Ausgabeart „Google-Lautsprecher (Chromecast 4 Lox NG)“** für die Ansagen des Mähers (Störung, Mähen beendet, Messerwechsel, Akku), ab Werk nicht gewählt. Voraussetzung ist das Plugin [Chromecast 4 Lox NG](https://github.com/timanders22/LoxBerry-Plugin-Chromecast4lox) ab 1.3.15 mit eingeschalteter „Sprachausgabe für andere Plugins“.
+* Eigenes **Sprechtoken** (getrennt vom Alexa-NG-Token), wahlweise Lautsprecher (leer = Standardgerät, auch `alle` oder `gruppe:<Name>`) und Lautstärke (leer = Ansagelautstärke des Chromecast-Plugins). Das Token wird wie ein Kennwort behandelt: nie angezeigt, nie in einer Adresse oder im Protokoll, nicht in „Einstellungen sichern“; eine Sicherung mit Token wird abgewiesen, beim Zurückspielen bleibt das hinterlegte.
+* Als gesendet gilt nur HTTP 200 mit `SPRECHEN;OK=1`. Bei einem Ausfall (Plugin fehlt oder zu alt, Sprachausgabe dort aus, Dienst aus, kein Lautsprecher verbunden, falsches Token, Stundengrenze) entfällt die Ansage – kein Wiederholen, kein Wechsel auf einen anderen Lautsprecher.
+* Reiter Test: „Testansage sprechen“ zeigt bei dieser Ausgabeart die Antwortzeile; neue Zeile „Antwortet Chromecast 4 Lox NG, passt das Sprechtoken?“ (Selbsttest ohne Ansage, nur bei geöffnetem Reiter).
+* Bei dieser Ausgabeart steht vom Ansagetext nur seine Länge im Protokoll.
+
 ## Was 1.1.14 behebt
 
 Durchgang mit vier Prüfern (Befunde: `Pruefung-Durchgang-2026-09-29/Robonect_BEFUNDE_UND_VERBESSERUNGEN.md`, Entscheidungen 1, 3, 8, 16, 19, 26 und 28).
@@ -715,6 +725,19 @@ liefern in beiden Sprachen zeichengleiche Ausgabe ohne eine Meldung.
   [Alexa-NG](https://github.com/timanders22/LoxBerry-Plugin-Alexa-NG) an
   Echo-Geräte (ab Werk nicht gewählt; das Sprechtoken wird wie ein Kennwort
   behandelt und reist nicht in der Sicherung)
+- **Ausgabeart „Google-Lautsprecher (Chromecast 4 Lox NG)“** (ab Werk nicht
+  gewählt): Ansagen über das Plugin
+  [Chromecast 4 Lox NG](https://github.com/timanders22/LoxBerry-Plugin-Chromecast4lox)
+  ab 1.3.15 an Chromecast- und Nest-Lautsprecher. Dort „Sprachausgabe für andere
+  Plugins“ einschalten und ein Sprechtoken festlegen; hier Lautsprecher (leer =
+  Standardgerät), Lautstärke (leer = Ansagelautstärke) und dieses Token eintragen –
+  ein eigenes, getrennt vom Alexa-NG-Token. Als gesendet gilt nur HTTP 200 mit
+  `SPRECHEN;OK=1`. Fällt das Plugin aus (fehlt oder zu alt, Sprachausgabe dort aus,
+  Dienst aus, kein Lautsprecher verbunden, falsches Token), entfällt die Ansage –
+  kein Wiederholen, kein Wechsel auf einen anderen Lautsprecher. Testansage,
+  Reiter Test („Antwortet Chromecast 4 Lox NG, passt das Sprechtoken?“) und
+  Protokoll nennen HTTP-Code und `GRUND`; vom Ansagetext steht nur die Länge im
+  Protokoll
 - Bis zu **neun Mäher**, MQTT, JSON, Protokoll (Passwörter werden maskiert)
 - Reiter: Einstellungen, Einbindung in Loxone (mit kompletter Baustein-Liste
   inkl. Regen- und Ruhezeitensperre), Test, Protokoll
@@ -830,6 +853,10 @@ HTTP wird mit HTTP 403 abgewiesen (siehe *Neu in 1.1.4*).
   `robonect.backup.json.alt` und meldet das; eingespielt wird sie nicht.
   Entfernt werden beide beim Deinstallieren (`uninstall/uninstall`)
 - Das Passwortfeld zeigt den gespeicherten Wert nie an; leer lassen behält ihn
+- Die Sprechtoken für Alexa-NG und für Chromecast 4 Lox NG werden wie Kennwörter
+  behandelt: nie angezeigt, nie in einer Adresse oder im Protokoll, nicht in
+  „Einstellungen sichern“; eine Sicherung, die ein Sprechtoken trägt, wird
+  abgewiesen, und beim Zurückspielen bleibt das hinterlegte Token
 - Vor dem Schreiben ins Protokoll werden Passwörter maskiert
 - **Keine personenbezogenen Daten** im Plugin selbst
 

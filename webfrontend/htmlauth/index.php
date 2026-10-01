@@ -218,13 +218,14 @@ $mw_tab = preg_match($mw_muster, $mw_wunsch) ? $mw_wunsch : 'tab-settings';
 $mw_eingaben = null;
 
 /** X-2: die Eingaben eines Formulars fuer die Einmalmeldung - nur Zeichenketten,
- *  nie Kennwort (m_pass) und Sprechtoken (tts_alexa_token). */
+ *  nie Kennwort (m_pass) und die Sprechtoken (tts_alexa_token, tts_google_token). */
 function mw_eingaben_sammeln($formular, array $falsch)
 {
     $namen = ($formular === 'mqtt') ? array('mqtt_enabled', 'mqtt_topic')
         : array('cache_sec', 'blade_hours', 'blade_base', 'stat_ein', 'notify_audio', 'notify_push',
                 'n_fehler', 'n_fertig', 'n_messer', 'n_akku', 'tts_mode', 'tts_ip', 'tts_port', 'tts_zones',
-                'tts_volume', 'tts_lang', 'tts_template', 'tts_alexa_geraet', 'tts_alexa_laut', 'tts_alexa_loeschen');
+                'tts_volume', 'tts_lang', 'tts_template', 'tts_alexa_geraet', 'tts_alexa_laut', 'tts_alexa_loeschen',
+                'tts_google_geraet', 'tts_google_laut', 'tts_google_loeschen');
     $werte = array();
     foreach ($namen as $n) {
         if (isset($_POST[$n]) && is_string($_POST[$n])) { $werte[$n] = substr($_POST[$n], 0, 600); }
@@ -321,6 +322,11 @@ if ($mw_ist_post && isset($_POST['mo_zurueck'])) {
             if (is_array($mw_neu['tts'])) {
                 $mw_neu['tts']['alexa_token'] = isset($mw_cfg['tts']['alexa_token'])
                     ? (string) $mw_cfg['tts']['alexa_token'] : '';
+                /* Ansage-3 (gs_ro): ebenso das Sprechtoken fuer Chromecast 4 Lox NG
+                 * (nur eine Zeichenkette ist ein Token - eine von Hand eingetragene
+                 * Liste gilt als keins, ohne PHP-Meldung). */
+                $mw_neu['tts']['google_token'] = (isset($mw_cfg['tts']['google_token']) && is_string($mw_cfg['tts']['google_token']))
+                    ? $mw_cfg['tts']['google_token'] : '';
             }
             $mw_alt_cfg = $mw_cfg;
             if (mo_config_speichern($mw_neu)) {
@@ -392,9 +398,15 @@ if ($mw_ist_post && isset($_POST['token_neu'])) {
 
 /* --- C9 (Ansage-2): Testansage mit den GESPEICHERTEN Einstellungen --- */
 if ($mw_ist_post && isset($_POST['tts_test'])) {
-    list($mw_tok, $mw_tgrund) = mo_say(mo_t('TEXT.TESTANSAGE_TEXT'));
+    $mw_say = mo_say(mo_t('TEXT.TESTANSAGE_TEXT'));
+    list($mw_tok, $mw_tgrund) = $mw_say;
     if ($mw_tok) {
         $mw_ok[] = sprintf(mo_t('TEXT.TESTANSAGE_OK'), mw_e((string) $mw_cfg['tts']['mode']));
+        /* Ansage-3 (gs_ro): bei Google-Lautsprechern auch die Antwortzeile von
+         * Chromecast 4 Lox NG (HTTP-Code und GRUND, nie das Token). */
+        if (isset($mw_say[2]) && $mw_say[2] !== '') {
+            $mw_ok[] = sprintf(mo_t('TEXT.TESTANSAGE_ANTWORT'), mw_e((string) $mw_say[2]));
+        }
     } else {
         $mw_fehler[] = sprintf(mo_t('TEXT.TESTANSAGE_FEHL'), mw_e($mw_tgrund));
     }
@@ -516,18 +528,32 @@ if ($mw_ist_post && isset($_POST['save'])) {
         $mw_mangel[] = mo_mangel('tts_alexa_token', 'tts.alexa_token', mo_t('TEXT.ALEXA_TOKEN_WIDERSPRUCH'));
     }
     if (is_string($mw_atok)) { $mw_atok = trim($mw_atok); }
+    /* Ansage-3 (gs_ro): ebenso das eigene Sprechtoken fuer Chromecast 4 Lox NG. */
+    $mw_gtok_alt = (isset($mw_cfg['tts']['google_token']) && is_string($mw_cfg['tts']['google_token']))
+        ? $mw_cfg['tts']['google_token'] : '';
+    $mw_gtok = isset($_POST['tts_google_token']) ? $_POST['tts_google_token'] : '';
+    $mw_gweg = isset($_POST['tts_google_loeschen']);
+    if (is_string($mw_gtok) && trim($mw_gtok) === '') { $mw_gtok = $mw_gweg ? '' : $mw_gtok_alt; }
+    elseif ($mw_gweg) {
+        $mw_mangel[] = mo_mangel('tts_google_token', 'tts.google_token', mo_t('TEXT.GOOGLE_TOKEN_WIDERSPRUCH'));
+    }
+    if (is_string($mw_gtok)) { $mw_gtok = trim($mw_gtok); }
     $mw_tts_ein = array();
     foreach (array('mode' => 'tts_mode', 'ip' => 'tts_ip', 'port' => 'tts_port', 'zones' => 'tts_zones',
                    'volume' => 'tts_volume', 'lang' => 'tts_lang', 'template' => 'tts_template',
-                   'alexa_geraet' => 'tts_alexa_geraet', 'alexa_laut' => 'tts_alexa_laut') as $mw_k => $mw_f) {
+                   'alexa_geraet' => 'tts_alexa_geraet', 'alexa_laut' => 'tts_alexa_laut',
+                   'google_geraet' => 'tts_google_geraet', 'google_laut' => 'tts_google_laut') as $mw_k => $mw_f) {
         $mw_tts_ein[$mw_k] = isset($_POST[$mw_f]) ? $_POST[$mw_f] : '';
     }
     $mw_tts_ein['alexa_token'] = $mw_atok;
+    $mw_tts_ein['google_token'] = $mw_gtok;
     list($mw_wert, $mw_l) = mo_wert_pruefen('tts', $mw_tts_ein);
     if ($mw_l) {
         $mw_mangel = array_merge($mw_mangel, $mw_l);
     } elseif ($mw_wert['mode'] === 'alexang' && $mw_wert['alexa_token'] === '') {
         $mw_mangel[] = mo_mangel('tts_alexa_token', 'tts.alexa_token', mo_t('TEXT.ALEXA_OHNE_TOKEN'));
+    } elseif ($mw_wert['mode'] === 'cc4lox' && $mw_wert['google_token'] === '') {
+        $mw_mangel[] = mo_mangel('tts_google_token', 'tts.google_token', mo_t('TEXT.GOOGLE_OHNE_TOKEN'));
     } else {
         $mw_neu['tts'] = $mw_wert;
     }
@@ -614,7 +640,8 @@ $mw_notify = is_array($mw_cfg['notify']) ? $mw_cfg['notify'] : array();
 $mw_notify += array('audio' => 0, 'push' => 0, 'fehler' => 1, 'fertig' => 1, 'messer' => 1, 'akku' => 0);
 $mw_tts = is_array($mw_cfg['tts']) ? $mw_cfg['tts'] : array();
 $mw_tts += array('mode' => 'musicserver', 'ip' => '', 'port' => 7091, 'zones' => '1', 'volume' => 8, 'lang' => 'de', 'template' => '',
-                 'alexa_geraet' => '', 'alexa_token' => '', 'alexa_laut' => -1);
+                 'alexa_geraet' => '', 'alexa_token' => '', 'alexa_laut' => -1,
+                 'google_geraet' => '', 'google_token' => '', 'google_laut' => -1);
 /* C7 (X-3): wuerde die eigene Sicherung abgewiesen? Nur Namen. */
 $mw_sich_mangel = mo_sicherung_mangel();
 $mw_list = mo_mowers();
@@ -910,6 +937,7 @@ for ($mw_i = 0; $mw_i < $mw_anz; $mw_i++) {
             <option value="audioserver"<?php echo $mw_modus === 'audioserver' ? ' selected' : ''; ?>><?php echo mw_e(mo_t('TEXT.ORIGINAL_LOXONE_AUDIOSERVER_VIA_LO')); ?></option>
             <option value="custom"<?php echo $mw_modus === 'custom' ? ' selected' : ''; ?>><?php echo mw_e(mo_t('TEXT.EIGENE_URL_VORLAGE')); ?></option>
             <option value="alexang"<?php echo $mw_modus === 'alexang' ? ' selected' : ''; ?>><?php echo mw_e(mo_t('TEXT.ALEXA_NG_AUSGABE')); ?></option>
+            <option value="cc4lox"<?php echo $mw_modus === 'cc4lox' ? ' selected' : ''; ?>><?php echo mw_e(mo_t('TEXT.GOOGLE_AUSGABE')); ?></option>
         </select>
     </div>
     <div>
@@ -960,6 +988,29 @@ for ($mw_i = 0; $mw_i < $mw_anz; $mw_i++) {
         <label><?php echo mw_e(mo_t('TEXT.ALEXA_TOKEN')); ?></label>
         <input data-role="none" type="password" name="tts_alexa_token"<?php echo mw_falsch('tts_alexa_token'); ?> value="" autocomplete="new-password" placeholder="<?php echo (string) $mw_tts['alexa_token'] !== '' ? mw_e(sprintf(mo_t('TEXT.ALEXA_TOKEN_GESPEICHERT'), strlen((string) $mw_tts['alexa_token']))) : ''; ?>">
         <label style="display:inline-flex;align-items:center;gap:6px;font-weight:400;"><input data-role="none" type="checkbox" name="tts_alexa_loeschen" value="1"<?php echo mw_haken('einst', 'tts_alexa_loeschen', false) ? ' checked' : ''; ?>> <?php echo mw_e(mo_t('TEXT.ALEXA_TOKEN_LOESCHEN')); ?></label>
+    </div>
+</div>
+</div>
+<?php /* Ansage-3 (gs_ro, 01.10.2026): die Felder fuer Google-Lautsprecher ueber
+       * Chromecast 4 Lox NG - wie bei Alexa-NG, mit eigenem Sprechtoken
+       * (Kennwortfeld, nie angezeigt, leer lassen behaelt es, der Haken loescht es,
+       * nie in der Einmalmeldung). */
+    $mw_gtl = (string) mw_wert('einst', 'tts_google_laut', (int) $mw_tts['google_laut'] >= 0 ? (int) $mw_tts['google_laut'] : ''); ?>
+<div id="tts_google_row" style="<?php echo $mw_modus === 'cc4lox' ? '' : 'display:none;'; ?>">
+<div class="sm-hinweis"><?php echo mo_t('TEXT.GOOGLE_HINWEIS'); ?></div>
+<div class="sm-row">
+    <div>
+        <label><?php echo mw_e(mo_t('TEXT.GOOGLE_GERAET')); ?></label>
+        <input data-role="none" type="text" name="tts_google_geraet"<?php echo mw_falsch('tts_google_geraet'); ?> value="<?php echo mw_e(mw_wert('einst', 'tts_google_geraet', $mw_tts['google_geraet'])); ?>" placeholder="<?php echo mw_e(mo_t('TEXT.GOOGLE_GERAET_PH')); ?>">
+    </div>
+    <div>
+        <label><?php echo mw_e(mo_t('TEXT.GOOGLE_LAUT')); ?></label>
+        <input data-role="none" type="number" name="tts_google_laut"<?php echo mw_falsch('tts_google_laut'); ?> value="<?php echo mw_e($mw_gtl); ?>" min="0" max="100" placeholder="<?php echo mw_e(mo_t('TEXT.GOOGLE_LAUT_PH')); ?>">
+    </div>
+    <div>
+        <label><?php echo mw_e(mo_t('TEXT.GOOGLE_TOKEN')); ?></label>
+        <input data-role="none" type="password" name="tts_google_token"<?php echo mw_falsch('tts_google_token'); ?> value="" autocomplete="new-password" placeholder="<?php echo (is_string($mw_tts['google_token']) && $mw_tts['google_token'] !== '') ? mw_e(sprintf(mo_t('TEXT.ALEXA_TOKEN_GESPEICHERT'), strlen($mw_tts['google_token']))) : ''; ?>">
+        <label style="display:inline-flex;align-items:center;gap:6px;font-weight:400;"><input data-role="none" type="checkbox" name="tts_google_loeschen" value="1"<?php echo mw_haken('einst', 'tts_google_loeschen', false) ? ' checked' : ''; ?>> <?php echo mw_e(mo_t('TEXT.GOOGLE_TOKEN_LOESCHEN')); ?></label>
     </div>
 </div>
 </div>
@@ -1432,6 +1483,8 @@ function mwTtsMode() {
     if (t) { t.style.display = (m === 'ms4h' || m === 'custom') ? 'block' : 'none'; }
     var a = document.getElementById('tts_alexa_row');
     if (a) { a.style.display = (m === 'alexang') ? 'block' : 'none'; }
+    var g = document.getElementById('tts_google_row');
+    if (g) { g.style.display = (m === 'cc4lox') ? 'block' : 'none'; }
     var port = document.getElementsByName('tts_port')[0];
     /* A23 (05.09.2026): bis 1.1.3 stand hier zusaetzlich port.value === '80'.
        Die Funktion laeuft beim Seitenaufbau; ein bewusst gespeicherter Port 80
