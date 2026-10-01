@@ -576,6 +576,36 @@ dabei; wer sie nirgends verdrahtet hatte, merkt nichts.
 HTTP 403 mit `SELFTEST;OK=0;ERR=TOKEN`. Es wird dabei nichts geschaltet und
 nichts angefahren. Hausstandard fuer alle Aktionsendpunkte.
 
+## Was 1.1.14 behebt
+
+Durchgang mit vier Prüfern (Befunde: `Pruefung-Durchgang-2026-09-29/Robonect_BEFUNDE_UND_VERBESSERUNGEN.md`, Entscheidungen 1, 3, 8, 16, 19, 26 und 28).
+Gemessen mit Attrappen für das Robonect-Modul, Broker und Alexa-NG unter PHP 7.4, 8.3, 8.4 und 8.5; nicht am Mäher.
+
+* **Sicherheit:** Ein Mähername oder Schlüssel aus einer Datei konnte im Reiter
+  Test als Skript ausgeführt werden – behoben.
+* **Ausfall:** Antwortet der Mäher nicht, bleiben Fehler, Modus und Akku auf dem
+  letzten Messwert stehen; nur `ok`, `status` und `code -1` gehen hinaus. Bisher sah
+  Loxone z. B. „kein Fehler“, obwohl der Mäher in Fehler 17 stand.
+* **Befehle:** Ein einzelner verlorener Statusabruf sperrt `stop` nicht mehr
+  60 Sekunden. Fehlgeschlagene Befehle nennen den Grund (Anmeldung, Modul, keine
+  Antwort). Derselbe Modus innerhalb von 60 s geht nur einmal hinaus
+  (`UNVERAENDERT=1`); Start, Stopp, Heim und Aufträge immer.
+* **Mehrere Mäher:** Steuerbefehle und Vorlage gibt es für jeden eingerichteten
+  Mäher.
+* **Neue Ausgabeart „Alexa-NG“** für Ansagen (ab Werk nicht gewählt) mit Knopf
+  „Testansage sprechen“.
+* **Speichern:** PRG; bei einer Beanstandung wird nichts gespeichert, alle Mängel
+  werden genannt, die Eingaben kommen markiert zurück, nichts wird still geklemmt.
+  „Einstellungen sichern“ warnt; ein leeres Token in einer Sicherung behält das
+  geltende mit Hinweis.
+* **Neuinstallation:** Alte Einstellungen werden nach `.alt` gelegt statt
+  eingespielt (`preinstall.sh`).
+* **MQTT:** Abräumen bei Präfixwechsel und „MQTT aus“ (auch vorgemerkt für die
+  Deinstallation), `-` für ausgetragene Mäher und fehlende Felder, nur Änderungen
+  mit vollem Satz alle 30 Minuten und 5 ms Abstand, Abodatei, Spalte „retained“ in
+  der Themenliste.
+* PHP 8.5: keine Verfallsmeldung mehr.
+
 ## Was 1.0.4 behebt
 
 Vier Meldungen eines Mitlesers. Alle vier treffen zu — bei der wichtigsten
@@ -679,7 +709,12 @@ liefern in beiden Sprachen zeichengleiche Ausgabe ohne eine Meldung.
   Warnung — Quittieren per Knopf oder `?cmd=blade_reset`
 - **Steuerung** per einfachem GET: `auto`, `man`, `home`, `eod`, `start`, `stop`
 - **Meldungen** als Ansage (TTS) und/oder Push: Störung, Schleifensignal
-  verloren, Mähen beendet, Messerwechsel fällig, Akku unter 20 %
+  verloren, Mähen beendet, Messerwechsel fällig, Akku unter 20 %. Die Ansage
+  geht an den Loxone Music Server, Audioserver4Home/MS4H, eine eigene
+  URL-Vorlage oder über das Plugin
+  [Alexa-NG](https://github.com/timanders22/LoxBerry-Plugin-Alexa-NG) an
+  Echo-Geräte (ab Werk nicht gewählt; das Sprechtoken wird wie ein Kennwort
+  behandelt und reist nicht in der Sicherung)
 - Bis zu **neun Mäher**, MQTT, JSON, Protokoll (Passwörter werden maskiert)
 - Reiter: Einstellungen, Einbindung in Loxone (mit kompletter Baustein-Liste
   inkl. Regen- und Ruhezeitensperre), Test, Protokoll
@@ -706,6 +741,15 @@ Virtueller Ausgang meldet das nicht: die Adresse sieht dann aus, als hätte sie
 gewirkt. Bis 1.1.3 standen die Befehlszeilen in dieser Tabelle ohne Token — wer
 sie abschrieb, bekam 403.
 
+Die Antwort eines Befehls lautet `CMD;OK=1|0|2;BEFEHL=…[;UNVERAENDERT=1;SEIT_S=n][;GRUND=…];INFO=…`.
+Derselbe **Modus** (`auto`, `man`, `home`, `eod`, `job`) innerhalb von 60 s geht
+nicht noch einmal an den Mäher (`UNVERAENDERT=1`); `start` und `stop` gehen
+immer hinaus. Scheitert ein Befehl, nennt `GRUND` die Ursache: `anmeldung`
+(Kennwort), `abgewiesen` (HTTP-Fehler des Moduls), `modul` (das Modul lehnt
+ab, `INFO` trägt seine Meldung), `kein_json`, `keine_antwort` (Ausgang
+unbekannt — der Befehl kann trotzdem gewirkt haben). Ein Befehl fragt das
+Modul immer selbst, auch wenn ein Statusabruf eben ohne Antwort blieb.
+
 `?json=1` lässt sich **nicht** mit einem Befehl verbinden: `?cmd=stop&json=1`
 wird seit 1.1.4 mit HTTP 400 und `ERR=MEHRDEUTIG` abgewiesen. Bis 1.1.3 gewann
 stillschweigend das JSON, und der Befehl geschah nie.
@@ -731,10 +775,10 @@ hinter dem MQTT-Gateway —, stellt sie so ein:
 |---|---|---|---|---|---|
 | `OK` | `ok` | 0 | 1 | | 0 |
 | `CODE` | `code` | -1 | 99 | | -1 (über MQTT flüchtig) |
-| `MODUS` | `modus` | -1 | 99 | | -1 (über MQTT flüchtig) |
+| `MODUS` | `modus` | -1 | 99 | | -1 (über MQTT: letzter Messwert bleibt) |
 | `BATT` | `batterie` | -1 | 100 | % | -1 |
-| `MAEHT`, `LAEDT`, `MESSERWARN`, `TIMER` | `maeht`, `laedt`, `messer_warn`, `timer` | 0 | 1 | | 0 (über MQTT flüchtig) |
-| `FEHLER` | `fehler` | 0 | 10000 | | 0 (über MQTT flüchtig) |
+| `MAEHT`, `LAEDT`, `MESSERWARN`, `TIMER` | `maeht`, `laedt`, `messer_warn`, `timer` | 0 | 1 | | 0 (über MQTT: letzter Messwert bleibt) |
+| `FEHLER` | `fehler` | 0 | 10000 | | 0 (über MQTT: letzter Messwert bleibt) |
 | `STUNDEN` | `stunden` | 0 | 100000 | h | 0 |
 | `DAUER` | `dauer` | 0 | 10000 | min | 0 |
 | `MESSER` | `messer_rest` | -1 | 10000 | h | -1 |
@@ -747,6 +791,13 @@ hinter dem MQTT-Gateway —, stellt sie so ein:
 | `FEHLERALTER` | `fehleralter` | -1 | 100000 | h | -1 (kein Fehler bekannt) |
 | `EINSHEUTE` / `MINHEUTE` | `einsheute` / `minheute` | 0 | 99 / 10000 | — / min | — |
 | `EINSWOCHE` / `MINWOCHE` | `einswoche` / `minwoche` | 0 | 999 / 100000 | — / min | — |
+
+Antwortet der Mäher nicht, gehen über MQTT nur `ok` (0), `status` und `code`
+mit −1 (flüchtig) hinaus, dazu die Werte, die nicht vom Mäher stammen
+(Meldeflags, `fehleralter`, Statistik); alle übrigen Themen bleiben auf dem
+zuletzt gemessenen Wert — in Loxone gilt ein Zustand nur zusammen mit `ok`.
+Liefert ein erfolgreicher Abruf ein Feld nicht, geht der davon abhängige
+Zustand über MQTT als `-` hinaus (HTTP behält die Zahl der Tabelle).
 
 Die letzten beiden Zeilen gibt es nur bei eingeschalteter Einsatzstatistik. Die
 Zahlen stehen im Plugin an einer Stelle (`mo_felder()` in `mower_lib.php`); die
@@ -774,8 +825,10 @@ HTTP wird mit HTTP 403 abgewiesen (siehe *Neu in 1.1.4*).
   Dateirechten 0600). Übertragung per HTTP-Basic-Auth statt in der URL.
   Bis 1.1.5 stand hier „ausschließlich in mower.json" — das war falsch: die
   Zweitschrift trägt denselben Inhalt samt Kennwort und Aktionstoken und
-  überlebt Update und Neuinstallation absichtlich. Entfernt wird sie beim
-  Deinstallieren (`uninstall/uninstall`)
+  überlebt ein Update absichtlich. Bei einer **Neuinstallation** legt
+  `preinstall.sh` eine liegengebliebene Zweitschrift nach
+  `robonect.backup.json.alt` und meldet das; eingespielt wird sie nicht.
+  Entfernt werden beide beim Deinstallieren (`uninstall/uninstall`)
 - Das Passwortfeld zeigt den gespeicherten Wert nie an; leer lassen behält ihn
 - Vor dem Schreiben ins Protokoll werden Passwörter maskiert
 - **Keine personenbezogenen Daten** im Plugin selbst

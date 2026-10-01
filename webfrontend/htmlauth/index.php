@@ -98,7 +98,9 @@ $mw_logfile = $mw_p['log'];
 
 /* ================= 2. Konfiguration, Vorgaben, Token ================= */
 
-$mw_saved = false; $mw_note = '';
+/* Durchgang 01.10.2026 (U2): Erfolg, Hinweis und Fehler als Listen - sie reisen
+ * in der Einmalmeldung. */
+$mw_ok = array(); $mw_warn = array();
 $mw_fehler = array();     // gesammelte Beanstandungen - nie ueberschreiben
 
 /* mo_config() heilt selbst: fehlende, leere und beschaedigte Dateien holt es
@@ -147,6 +149,8 @@ if ($mw_fehlten) {
  */
 $mw_fmt = mo_formtoken();
 $mw_ist_post = (isset($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'POST');
+/* U2: auch ein abgewiesener POST endet mit der Umleitung (Meldung im GET). */
+$mw_war_post = $mw_ist_post;
 if ($mw_ist_post) {
     $mw_mit = (isset($_POST['fmt']) && is_string($_POST['fmt'])) ? $_POST['fmt'] : '';
     $mw_csrf_ok = ($mw_fmt !== '' && hash_equals($mw_fmt, $mw_mit));
@@ -195,30 +199,81 @@ $mw_wunsch = isset($_POST['activetab']) ? (string) $_POST['activetab']
 $mw_tab = preg_match($mw_muster, $mw_wunsch) ? $mw_wunsch : 'tab-settings';
 
 /* ================= 5. Handler ================= */
+/*
+ * U2 (Durchgang 01.10.2026, Regeln/04, Entscheidung Nr. 19, gemessen): bis
+ * 1.1.14 rendete jeder Handler die Seite unmittelbar nach dem POST - kein
+ * einziger endete mit einer Umleitung. Neuladen ohne JavaScript schickte
+ * Speichern, Quittieren und "Protokoll leeren" erneut. Jetzt endet JEDER POST
+ * mit 303 auf den Reiter; das Ergebnis reist als Einmalmeldung
+ * (mo_flash_schreiben(), gelesen nur beim GET). Downloads (Vorlagen,
+ * Sicherung) liefern weiter unmittelbar ihre Datei und enden mit exit - VOR
+ * lbheader().
+ *
+ * U3 (Entscheidung Nr. 16, gemessen): bei einer Beanstandung wird NICHTS
+ * gespeichert, auch nicht die uebrigen, richtigen Felder. Bis 1.1.14 stand
+ * hier "A14: gespeichert wird auch dann, wenn etwas beanstandet wurde".
+ * U4 (X-2): die eingetippten Werte des beanstandeten Formulars reisen mit
+ * (nie Kennwort und Sprechtoken), das Feld ist markiert.
+ */
+$mw_eingaben = null;
 
-/* --- Downloads zuerst: sie enden mit exit und muessen VOR lbheader() --- */
-
-if ($mw_ist_post && isset($_POST['vorlage_vo'])) {
-    list($mw_vname, $mw_vinhalt) = mo_vo_vorlage();
-    header('Content-Type: application/x-download');
-    header('Content-Disposition: attachment; filename="' . $mw_vname . '"');
-    echo $mw_vinhalt;
-    exit;
+/** X-2: die Eingaben eines Formulars fuer die Einmalmeldung - nur Zeichenketten,
+ *  nie Kennwort (m_pass) und Sprechtoken (tts_alexa_token). */
+function mw_eingaben_sammeln($formular, array $falsch)
+{
+    $namen = ($formular === 'mqtt') ? array('mqtt_enabled', 'mqtt_topic')
+        : array('cache_sec', 'blade_hours', 'blade_base', 'stat_ein', 'notify_audio', 'notify_push',
+                'n_fehler', 'n_fertig', 'n_messer', 'n_akku', 'tts_mode', 'tts_ip', 'tts_port', 'tts_zones',
+                'tts_volume', 'tts_lang', 'tts_template', 'tts_alexa_geraet', 'tts_alexa_laut', 'tts_alexa_loeschen');
+    $werte = array();
+    foreach ($namen as $n) {
+        if (isset($_POST[$n]) && is_string($_POST[$n])) { $werte[$n] = substr($_POST[$n], 0, 600); }
+    }
+    if ($formular === 'einst') {
+        foreach (array('m_name', 'm_ip', 'm_user', 'm_bhours', 'm_bbase', 'm_del') as $n) {
+            if (!isset($_POST[$n]) || !is_array($_POST[$n])) { continue; }
+            foreach ($_POST[$n] as $i => $w) {
+                if (is_int($i) && $i >= 0 && $i < mo_max_maeher() && is_string($w)) {
+                    $werte[$n . '[' . $i . ']'] = substr($w, 0, 600);
+                }
+            }
+        }
+    }
+    return array('formular' => $formular, 'werte' => $werte, 'falsch' => array_values(array_unique($falsch)));
 }
-if ($mw_ist_post && isset($_POST['vorlage'])) {
-    list($mw_vname, $mw_vinhalt) = mo_vorlage(isset($_POST['vorlage_dev']) ? (int) $_POST['vorlage_dev'] : 1);
-    header('Content-Type: application/x-download');
-    header('Content-Disposition: attachment; filename="' . $mw_vname . '"');
-    echo $mw_vinhalt;
-    exit;
+
+/** Ein Feld einer Maeherzeile aus dem POST: Zeichenkette, '' wenn es fehlt,
+ *  null wenn es keine Zeichenkette ist (Liste statt Wert). */
+function mw_post_zelle($name, $i)
+{
+    if (!isset($_POST[$name]) || !is_array($_POST[$name]) || !array_key_exists($i, $_POST[$name])) { return ''; }
+    return is_string($_POST[$name][$i]) ? $_POST[$name][$i] : null;
+}
+
+/* --- Downloads zuerst: sie enden mit exit und muessen VOR lbheader() ---
+ * U9: beide Vorlagen je Maeher (vorlage_dev); eine unzulaessige Nummer wird
+ * abgewiesen, nicht auf 1 gebogen. */
+if ($mw_ist_post && (isset($_POST['vorlage']) || isset($_POST['vorlage_vo']))) {
+    $mw_vd = (isset($_POST['vorlage_dev']) && is_string($_POST['vorlage_dev'])) ? trim($_POST['vorlage_dev']) : '1';
+    if (preg_match('/^[1-9]$/', $mw_vd) === 1 && (int) $mw_vd <= max(1, count(mo_mowers()))) {
+        list($mw_vname, $mw_vinhalt) = isset($_POST['vorlage_vo']) ? mo_vo_vorlage((int) $mw_vd) : mo_vorlage((int) $mw_vd);
+        header('Content-Type: application/x-download');
+        header('Content-Disposition: attachment; filename="' . $mw_vname . '"');
+        echo $mw_vinhalt;
+        exit;
+    }
+    $mw_fehler[] = sprintf(mo_t('TEXT.VORLAGE_DEV_FALSCH'), htmlspecialchars(mo_kuerzen($mw_vd, 10), ENT_QUOTES, 'UTF-8'));
+    $mw_tab = 'tab-loxone';
 }
 
 /* Einstellungen sichern.
  *
- * Ausgegeben wird die VOLLE Konfiguration - samt Aktionstoken. Ohne ihn
- * stuenden nach dem Zurueckspielen alle Felder richtig, und das Plugin kaeme
- * trotzdem nicht an die Anlage; die Datei waere wertlos. Damit traegt sie ein
- * Geheimnis, und der Warnkasten am Knopf sagt das. */
+ * Ausgegeben wird die VOLLE Konfiguration - samt Aktionstoken, ohne das
+ * Sprechtoken fuer Alexa-NG. Ohne das Aktionstoken stuenden nach dem
+ * Zurueckspielen alle Felder richtig, und das Plugin kaeme trotzdem nicht an
+ * die Anlage; die Datei waere wertlos. C7 (X-3): wuerde das Zurueckspielen
+ * die Datei abweisen, traegt ihr Kopf _warnung (nur Namen), und der Knopf
+ * zeigt die Warnung schon vorher. */
 if ($mw_ist_post && isset($_POST['mo_sichern'])) {
     $mw_js = mo_sicherung_erzeugen();
     if ($mw_js !== false) {
@@ -228,6 +283,7 @@ if ($mw_ist_post && isset($_POST['mo_sichern'])) {
         exit;
     }
     $mw_fehler[] = mo_t('TEXT.SICH_SCHREIBFEHLER');
+    $mw_tab = 'tab-settings';
 }
 
 /* --- Einstellungen zurueckspielen ---
@@ -240,7 +296,7 @@ if ($mw_ist_post && isset($_POST['mo_sichern'])) {
  * gemeldet, nicht die erste. */
 if ($mw_ist_post && isset($_POST['mo_zurueck'])) {
     if (!isset($_FILES['mo_sicherung']) || !is_array($_FILES['mo_sicherung'])
-        || !isset($_FILES['mo_sicherung']['tmp_name'])
+        || !isset($_FILES['mo_sicherung']['tmp_name']) || !is_string($_FILES['mo_sicherung']['tmp_name'])
         || !@is_uploaded_file($_FILES['mo_sicherung']['tmp_name'])) {
         $mw_fehler[] = mo_t('TEXT.SICH_KEINE_DATEI');
     } elseif ((int) $_FILES['mo_sicherung']['size'] > 262144) {
@@ -254,15 +310,30 @@ if ($mw_ist_post && isset($_POST['mo_zurueck'])) {
         } else {
             /* Das Aktionstoken der Datei gilt - sonst waere die Sicherung
              * wertlos. Ist in der Datei keines, bleibt das bisherige stehen:
-             * ein leeres Feld darf die Loxone-Adressen nicht abschneiden. */
-            if (trim((string) $mw_neu['aktionstoken']) === '') {
+             * ein leeres Feld darf die Loxone-Adressen nicht abschneiden.
+             * C8 (Durchgang 01.10.2026, Nr. 19): die Meldung sagt es jetzt -
+             * bis 1.1.14 stand nur "10 Werte uebernommen". */
+            $mw_token_blieb = (trim((string) $mw_neu['aktionstoken']) === '');
+            if ($mw_token_blieb) {
                 $mw_neu['aktionstoken'] = (string) $mw_cfg['aktionstoken'];
             }
+            /* C9: das Sprechtoken reist nie in einer Datei - das geltende bleibt. */
+            if (is_array($mw_neu['tts'])) {
+                $mw_neu['tts']['alexa_token'] = isset($mw_cfg['tts']['alexa_token'])
+                    ? (string) $mw_cfg['tts']['alexa_token'] : '';
+            }
+            $mw_alt_cfg = $mw_cfg;
             if (mo_config_speichern($mw_neu)) {
                 $mw_cfg = mo_config();
                 $mw_fmt = mo_formtoken();   // das Merkmal haengt am Token
-                $mw_note = sprintf(mo_t('TEXT.SICH_UEBERNOMMEN'), $mw_n);
-                mo_log('Einstellungen aus einer Sicherung zurueckgespielt: ' . $mw_n . ' Werte.');
+                $mw_ok[] = sprintf(mo_t('TEXT.SICH_UEBERNOMMEN'), $mw_n);
+                if ($mw_token_blieb) { $mw_ok[] = mo_t('TEXT.SICH_TOKEN_BLIEB'); }
+                mo_log('Einstellungen aus einer Sicherung zurueckgespielt: ' . $mw_n . ' Werte'
+                    . ($mw_token_blieb ? ' (die Datei trug kein Aktionstoken - das bisherige bleibt).' : '.'));
+                // M2/M3: Praefix oder Schalter koennen sich geaendert haben.
+                $mw_r = mo_mqtt_nach_aenderung($mw_alt_cfg, $mw_cfg);
+                foreach ($mw_r['ok'] as $mw_m) { $mw_ok[] = $mw_m; }
+                foreach ($mw_r['fehler'] as $mw_m) { $mw_fehler[] = $mw_m; }
             } else {
                 $mw_fehler[] = mo_t('TEXT.SICH_SCHREIBFEHLER');
             }
@@ -273,17 +344,35 @@ if ($mw_ist_post && isset($_POST['mo_zurueck'])) {
 
 if ($mw_ist_post && isset($_POST['clearlog'])) {
     if (!is_dir(dirname($mw_logfile))) { @mkdir(dirname($mw_logfile), 0775, true); }   // A18
-    @file_put_contents($mw_logfile, '[' . date('Y-m-d H:i:s') . "] Protokoll geleert (Admin-Oberflaeche)\n");
+    if (@file_put_contents($mw_logfile, '[' . date('Y-m-d H:i:s') . "] Protokoll geleert (Admin-Oberflaeche)\n") === false) {
+        $mw_fehler[] = sprintf(mo_t('TEXT.LOG_NICHT_GELEERT'), mw_e($mw_logfile));
+    } else {
+        $mw_ok[] = mo_t('TEXT.LOG_GELEERT');
+    }
     $mw_tab = 'tab-log';
 }
 
+/* C5 (Durchgang 01.10.2026, gemessen): bis 1.1.14 hiess jeder Fehlschlag "Die
+ * Einstellungen liessen sich nicht schreiben" - auch bei einem schweigenden
+ * Maeher, bei 401 und bei einem nicht eingerichteten. Jetzt nennt die Meldung
+ * den Schritt. Eine unzulaessige Nummer wird abgewiesen, nicht geklemmt. */
 if ($mw_ist_post && isset($_POST['bladereset'])) {
-    $mw_dev = max(1, min(mo_max_maeher(), (int) (isset($_POST['bladereset']) ? $_POST['bladereset'] : 1)));
-    if (mo_blade_reset($mw_dev)) {
-        $mw_note = mo_t('TEXT.MESSER_QUITTIERT');
-        $mw_cfg = mo_config();
+    $mw_br = is_string($_POST['bladereset']) ? trim($_POST['bladereset']) : '';
+    if (preg_match('/^[1-9]$/', $mw_br) !== 1) {
+        $mw_fehler[] = sprintf(mo_t('TEXT.MESSER_NICHT_EINGERICHTET'), htmlspecialchars(mo_kuerzen($mw_br, 10), ENT_QUOTES, 'UTF-8'));
     } else {
-        $mw_fehler[] = mo_t('TEXT.SICH_SCHREIBFEHLER');
+        $mw_bgrund = '';
+        $mw_btext = '';
+        if (mo_blade_reset((int) $mw_br, $mw_bgrund, $mw_btext)) {
+            $mw_ok[] = mo_t('TEXT.MESSER_QUITTIERT');
+            $mw_cfg = mo_config();
+        } elseif ($mw_bgrund === 'nicht_erreichbar') {
+            $mw_fehler[] = sprintf(mo_t('TEXT.MESSER_NICHT_ERREICHBAR'), mw_e($mw_btext));
+        } elseif ($mw_bgrund === 'nicht_eingerichtet') {
+            $mw_fehler[] = sprintf(mo_t('TEXT.MESSER_NICHT_EINGERICHTET'), (int) $mw_br);
+        } else {
+            $mw_fehler[] = mo_t('TEXT.SICH_SCHREIBFEHLER');
+        }
     }
     $mw_tab = 'tab-settings';
 }
@@ -293,7 +382,7 @@ if ($mw_ist_post && isset($_POST['token_neu'])) {
     $mw_cfg['aktionstoken'] = mo_token_erzeugen();
     if (mo_config_speichern($mw_cfg)) {
         $mw_fmt = mo_formtoken();   // das Merkmal wechselt mit
-        $mw_note = mo_t('TEXT.TOKEN_NEU_OK');
+        $mw_ok[] = mo_t('TEXT.TOKEN_NEU_OK');
         mo_log('Ein neues Aktionstoken wurde erzeugt.');
     } else {
         $mw_fehler[] = sprintf(mo_t('TEXT.FEHLER_SCHREIBEN'), mw_e($mw_cfgfile));
@@ -301,94 +390,111 @@ if ($mw_ist_post && isset($_POST['token_neu'])) {
     $mw_tab = 'tab-loxone';
 }
 
+/* --- C9 (Ansage-2): Testansage mit den GESPEICHERTEN Einstellungen --- */
+if ($mw_ist_post && isset($_POST['tts_test'])) {
+    list($mw_tok, $mw_tgrund) = mo_say(mo_t('TEXT.TESTANSAGE_TEXT'));
+    if ($mw_tok) {
+        $mw_ok[] = sprintf(mo_t('TEXT.TESTANSAGE_OK'), mw_e((string) $mw_cfg['tts']['mode']));
+    } else {
+        $mw_fehler[] = sprintf(mo_t('TEXT.TESTANSAGE_FEHL'), mw_e($mw_tgrund));
+    }
+    $mw_tab = 'tab-test';
+}
+
 /* --- MQTT speichern (eigener Reiter, Hausstandard) --- */
 if ($mw_ist_post && isset($_POST['mqtt_save'])) {
+    mo_nennform('formular');
     $mw_neu = $mw_cfg;
     $mw_neu['mqtt_enabled'] = isset($_POST['mqtt_enabled']) ? 1 : 0;
-    /* Gegen DIESELBE Positivliste wie die Sicherung - eine zweite Wahrheit
-     * ueber zulaessige Werte gibt es nicht. */
-    list($mw_wert, $mw_m) = mo_wert_pruefen('mqtt_topic',
-        isset($_POST['mqtt_topic']) ? $_POST['mqtt_topic'] : 'maeher');
-    if ($mw_m !== '') { $mw_fehler[] = $mw_m; } else { $mw_neu['mqtt_topic'] = $mw_wert; }
-    /* A14: gespeichert wird auch dann, wenn etwas beanstandet wurde -
-     * $mw_neu ist eine Fortschreibung von $mw_cfg, ein beanstandetes Feld
-     * hat oben keine Zuweisung bekommen und traegt deshalb weiter seinen
-     * bisherigen Wert. Siehe den Speicher-Handler der Einstellungen. */
-    if (mo_config_speichern($mw_neu)) { $mw_cfg = mo_config(); $mw_saved = true; }
-    else { $mw_fehler[] = sprintf(mo_t('TEXT.FEHLER_SCHREIBEN'), mw_e($mw_cfgfile)); }
+    /* Gegen DIESELBE Positivliste wie die Sicherung. Ein leeres oder fehlendes
+     * Thema wird beanstandet, nicht still zu 'maeher' (C6, Nr. 19). */
+    list($mw_wert, $mw_l) = mo_wert_pruefen('mqtt_topic', isset($_POST['mqtt_topic']) ? $_POST['mqtt_topic'] : '');
+    if ($mw_l) {
+        $mw_fehler[] = mo_t('TEXT.NICHTS_GESPEICHERT');
+        $mw_falsch = array();
+        foreach ($mw_l as $mw_e) { $mw_fehler[] = $mw_e['text']; $mw_falsch[] = $mw_e['feld']; }
+        $mw_eingaben = mw_eingaben_sammeln('mqtt', $mw_falsch);
+        mo_log('MQTT-Einstellungen beanstandet - es wurde nichts gespeichert.');
+    } else {
+        $mw_neu['mqtt_topic'] = $mw_wert;
+        $mw_alt_cfg = $mw_cfg;
+        if (mo_config_speichern($mw_neu)) {
+            $mw_cfg = mo_config();
+            $mw_ok[] = mo_t('TEXT.KONFIGURATION_GESPEICHERT');
+            $mw_r = mo_mqtt_nach_aenderung($mw_alt_cfg, $mw_cfg);
+            foreach ($mw_r['ok'] as $mw_m) { $mw_ok[] = $mw_m; }
+            foreach ($mw_r['fehler'] as $mw_m) { $mw_fehler[] = $mw_m; }
+        } else {
+            $mw_fehler[] = sprintf(mo_t('TEXT.FEHLER_SCHREIBEN'), mw_e($mw_cfgfile));
+        }
+    }
     $mw_tab = 'tab-mqtt';
 }
 
 /* --- Einstellungen speichern --- */
 if ($mw_ist_post && isset($_POST['save'])) {
+    mo_nennform('formular');
     /* Aus dem Bestand uebernehmen, was dieses Formular nicht mitschickt.
      * BIS 1.0.8 FEHLTE DAS FUER aktionstoken: jedes Speichern warf das Token
      * still weg, der naechste Seitenaufruf erzeugte ein NEUES - und alle
      * Loxone-Adressen liefen auf 403. Deshalb wird hier NICHT von Grund auf
      * neu gebaut, sondern der Bestand fortgeschrieben. */
     $mw_neu = $mw_cfg;
+    $mw_mangel = array();
 
     /* --- Maeher. Der Index steht AUSGESCHRIEBEN im Feldnamen (m_ip[0] statt
      * m_ip[]): eine nicht angehakte Loeschbox sendet gar nichts, und mit
      * fortlaufenden Klammern rutschten danach alle folgenden Zeilen um eine
      * Position - jeder Maeher bekaeme die Zugangsdaten seines Nachbarn.
      * Geloescht wird ueber den Haken, NIE durch Leeren eines Feldes. */
-    $mw_ips  = isset($_POST['m_ip'])   && is_array($_POST['m_ip'])   ? $_POST['m_ip']   : array();
-    $mw_nam  = isset($_POST['m_name']) && is_array($_POST['m_name']) ? $_POST['m_name'] : array();
-    $mw_usr  = isset($_POST['m_user']) && is_array($_POST['m_user']) ? $_POST['m_user'] : array();
-    $mw_pwd  = isset($_POST['m_pass']) && is_array($_POST['m_pass']) ? $_POST['m_pass'] : array();
-    $mw_del  = isset($_POST['m_del'])  && is_array($_POST['m_del'])  ? $_POST['m_del']  : array();
-    /* Messerwechsel je Maeher (1.1.4). Ein LEERES Feld heisst "die Vorgabe
-     * gilt" und wird nicht als 0 uebernommen - sonst waere aus "erbt den
-     * Nullpunkt" stillschweigend "Nullpunkt 0" geworden. */
-    $mw_bhs  = isset($_POST['m_bhours']) && is_array($_POST['m_bhours']) ? $_POST['m_bhours'] : array();
-    $mw_bbs  = isset($_POST['m_bbase'])  && is_array($_POST['m_bbase'])  ? $_POST['m_bbase']  : array();
     $mw_alt  = is_array($mw_cfg['mowers']) ? array_values($mw_cfg['mowers']) : array();
     $mw_liste = array();
     for ($mw_i = 0; $mw_i < mo_max_maeher(); $mw_i++) {
-        if (!empty($mw_del[$mw_i])) { continue; }
-        $mw_ip = trim((string) (isset($mw_ips[$mw_i]) ? $mw_ips[$mw_i] : ''));
+        if (mw_post_zelle('m_del', $mw_i) !== '' && isset($mw_alt[$mw_i])) { continue; }
+        $mw_z = array();
+        foreach (array('m_name' => 'name', 'm_ip' => 'ip', 'm_user' => 'user', 'm_pass' => 'pass',
+                       'm_bhours' => 'blade_hours', 'm_bbase' => 'blade_base') as $mw_f => $mw_k) {
+            $mw_v = mw_post_zelle($mw_f, $mw_i);
+            $mw_z[$mw_k] = ($mw_v === null) ? array() : $mw_v;     // Liste -> von der Pruefung abgewiesen
+        }
+        $mw_ip = is_string($mw_z['ip']) ? trim($mw_z['ip']) : 'x';
         if ($mw_ip === '') {
-            /* A19 (04.09.2026): der Hilfetext unter der Tabelle sagt
-             * woertlich "Geloescht wird ueber den Haken, nie durch Leeren
-             * eines Feldes". Fuer den Namen stimmte das, fuer die ADRESSE
-             * nicht: ein versehentlich geleertes Adressfeld warf die Zeile
-             * samt Benutzer und Kennwort weg, und die Seite meldete
-             * "Konfiguration gespeichert". Eine Zeile, die es vorher gab,
-             * wird jetzt beanstandet; eine leer gebliebene Zeile bleibt
-             * stillschweigend weg - die gab es ja nie. */
             if (isset($mw_alt[$mw_i]) && is_array($mw_alt[$mw_i])) {
-                $mw_fehler[] = sprintf(mo_t('TEXT.MAEHER_ADRESSE_LEER'), $mw_i + 1);
-                /* A14 (06.09.2026): die Zeile wird UNVERAENDERT uebernommen.
-                 * Bis 1.1.5 fiel sie hier heraus und das Speichern brach
-                 * ganz ab - wer nebenbei etwas anderes geaendert hatte,
-                 * verlor auch das. Melden ist richtig, blockieren nicht. */
-                $mw_liste[] = $mw_alt[$mw_i];
+                /* A19 (04.09.2026): ein versehentlich geleertes Adressfeld warf
+                 * die Zeile samt Zugangsdaten weg. Beanstandet; seit dem
+                 * Durchgang 01.10.2026 (Nr. 16) wird dann gar nichts gespeichert. */
+                $mw_mangel[] = mo_mangel('m_ip[' . $mw_i . ']', 'mowers.' . ($mw_i + 1) . '.ip',
+                                         sprintf(mo_t('TEXT.MAEHER_ADRESSE_LEER'), $mw_i + 1));
+            } else {
+                /* Nr. 19: eine neue Zeile mit Angaben, aber ohne Adresse wurde bis
+                 * 1.1.14 still verworfen - jetzt beanstandet. */
+                foreach (array('name', 'user', 'pass', 'blade_hours', 'blade_base') as $mw_k) {
+                    if (!is_string($mw_z[$mw_k]) || trim($mw_z[$mw_k]) !== '') {
+                        $mw_mangel[] = mo_mangel('m_ip[' . $mw_i . ']', 'mowers.' . ($mw_i + 1) . '.ip',
+                                                 sprintf(mo_t('TEXT.MAEHER_ADRESSE_FEHLT'), $mw_i + 1));
+                        break;
+                    }
+                }
             }
             continue;
         }
-        $mw_pw = (string) (isset($mw_pwd[$mw_i]) ? $mw_pwd[$mw_i] : '');
         // Leeres Passwortfeld = bisheriges Passwort behalten (es wird nie angezeigt)
-        if ($mw_pw === '' && isset($mw_alt[$mw_i]['pass'])) { $mw_pw = (string) $mw_alt[$mw_i]['pass']; }
-        $mw_zeile = array(
-            'name' => (string) (isset($mw_nam[$mw_i]) ? $mw_nam[$mw_i] : ''),
-            'ip'   => $mw_ip,
-            'user' => (string) (isset($mw_usr[$mw_i]) ? $mw_usr[$mw_i] : ''),
-            'pass' => $mw_pw);
-        $mw_bh = trim((string) (isset($mw_bhs[$mw_i]) ? $mw_bhs[$mw_i] : ''));
-        $mw_bb = trim((string) (isset($mw_bbs[$mw_i]) ? $mw_bbs[$mw_i] : ''));
-        if ($mw_bh !== '') { $mw_zeile['blade_hours'] = $mw_bh; }
-        if ($mw_bb !== '') { $mw_zeile['blade_base'] = $mw_bb; }
-        $mw_liste[] = $mw_zeile;
+        if ($mw_z['pass'] === '' && isset($mw_alt[$mw_i]['pass'])) { $mw_z['pass'] = (string) $mw_alt[$mw_i]['pass']; }
+        /* Messerwechsel je Maeher (1.1.4): ein LEERES Feld heisst "die Vorgabe
+         * gilt" und wird nicht als 0 uebernommen. */
+        foreach (array('blade_hours', 'blade_base') as $mw_k) {
+            if (is_string($mw_z[$mw_k]) && trim($mw_z[$mw_k]) === '') { unset($mw_z[$mw_k]); }
+        }
+        $mw_z['_zeile'] = $mw_i;
+        $mw_liste[] = $mw_z;
     }
-    /* Alle Beanstandungen sammeln, nicht die erste melden - der Benutzer
-     * korrigiert sonst einen Fehler nach dem anderen. */
-    list($mw_wert, $mw_m) = mo_wert_pruefen('mowers', $mw_liste);
-    if ($mw_m !== '') { $mw_fehler[] = $mw_m; } else { $mw_neu['mowers'] = $mw_wert; }
+    /* U5: alle Beanstandungen sammeln, nicht die erste melden. */
+    list($mw_wert, $mw_l) = mo_wert_pruefen('mowers', $mw_liste);
+    if ($mw_l) { $mw_mangel = array_merge($mw_mangel, $mw_l); } else { $mw_neu['mowers'] = $mw_wert; }
 
     foreach (array('cache_sec', 'blade_hours', 'blade_base') as $mw_k) {
-        list($mw_wert, $mw_m) = mo_wert_pruefen($mw_k, isset($_POST[$mw_k]) ? $_POST[$mw_k] : '');
-        if ($mw_m !== '') { $mw_fehler[] = $mw_m; } else { $mw_neu[$mw_k] = $mw_wert; }
+        list($mw_wert, $mw_l) = mo_wert_pruefen($mw_k, isset($_POST[$mw_k]) ? $_POST[$mw_k] : '');
+        if ($mw_l) { $mw_mangel = array_merge($mw_mangel, $mw_l); } else { $mw_neu[$mw_k] = $mw_wert; }
     }
 
     $mw_neu['stat_ein'] = isset($_POST['stat_ein']) ? 1 : 0;
@@ -400,46 +506,106 @@ if ($mw_ist_post && isset($_POST['save'])) {
         'messer' => isset($_POST['n_messer']) ? 1 : 0,
         'akku'   => isset($_POST['n_akku']) ? 1 : 0,
     );
-    list($mw_wert, $mw_m) = mo_wert_pruefen('tts', array(
-        'mode'     => (string) (isset($_POST['tts_mode']) ? $_POST['tts_mode'] : 'musicserver'),
-        'ip'       => (string) (isset($_POST['tts_ip']) ? $_POST['tts_ip'] : ''),
-        'port'     => (string) (isset($_POST['tts_port']) ? $_POST['tts_port'] : '7091'),
-        'zones'    => (string) (isset($_POST['tts_zones']) ? $_POST['tts_zones'] : '1'),
-        'volume'   => (string) (isset($_POST['tts_volume']) ? $_POST['tts_volume'] : '8'),
-        'lang'     => (string) (isset($_POST['tts_lang']) ? $_POST['tts_lang'] : 'de'),
-        'template' => (string) (isset($_POST['tts_template']) ? $_POST['tts_template'] : ''),
-    ));
-    if ($mw_m !== '') { $mw_fehler[] = $mw_m; } else { $mw_neu['tts'] = $mw_wert; }
+    /* C9 (Ansage-2): das Sprechtoken - leer lassen behaelt es, der Haken
+     * loescht es; beides zugleich ist ein Widerspruch und wird beanstandet. */
+    $mw_atok_alt = isset($mw_cfg['tts']['alexa_token']) ? (string) $mw_cfg['tts']['alexa_token'] : '';
+    $mw_atok = isset($_POST['tts_alexa_token']) ? $_POST['tts_alexa_token'] : '';
+    $mw_aweg = isset($_POST['tts_alexa_loeschen']);
+    if (is_string($mw_atok) && trim($mw_atok) === '') { $mw_atok = $mw_aweg ? '' : $mw_atok_alt; }
+    elseif ($mw_aweg) {
+        $mw_mangel[] = mo_mangel('tts_alexa_token', 'tts.alexa_token', mo_t('TEXT.ALEXA_TOKEN_WIDERSPRUCH'));
+    }
+    if (is_string($mw_atok)) { $mw_atok = trim($mw_atok); }
+    $mw_tts_ein = array();
+    foreach (array('mode' => 'tts_mode', 'ip' => 'tts_ip', 'port' => 'tts_port', 'zones' => 'tts_zones',
+                   'volume' => 'tts_volume', 'lang' => 'tts_lang', 'template' => 'tts_template',
+                   'alexa_geraet' => 'tts_alexa_geraet', 'alexa_laut' => 'tts_alexa_laut') as $mw_k => $mw_f) {
+        $mw_tts_ein[$mw_k] = isset($_POST[$mw_f]) ? $_POST[$mw_f] : '';
+    }
+    $mw_tts_ein['alexa_token'] = $mw_atok;
+    list($mw_wert, $mw_l) = mo_wert_pruefen('tts', $mw_tts_ein);
+    if ($mw_l) {
+        $mw_mangel = array_merge($mw_mangel, $mw_l);
+    } elseif ($mw_wert['mode'] === 'alexang' && $mw_wert['alexa_token'] === '') {
+        $mw_mangel[] = mo_mangel('tts_alexa_token', 'tts.alexa_token', mo_t('TEXT.ALEXA_OHNE_TOKEN'));
+    } else {
+        $mw_neu['tts'] = $mw_wert;
+    }
 
-    /* ==============================================================
-     * A14 (06.09.2026, gemessen) - melden ist richtig, blockieren nicht
-     * ==============================================================
-     *
-     * Bis 1.1.5 stand hier "if (!$mw_fehler)". Eine einzige Beanstandung -
-     * etwa eine versehentlich geleerte Maeheradresse - verhinderte damit
-     * das Speichern ALLER uebrigen Felder, und weil das Formular danach
-     * aus $mw_cfg gefuellt wird, waren die Eingaben auch von der Seite
-     * fort. Der Anwender aenderte drei Dinge, bekam EINE Meldung ueber die
-     * Adresse und verlor die beiden anderen Aenderungen unbemerkt.
-     *
-     * Warum es jetzt sicher ist, trotzdem zu schreiben: $mw_neu ist eine
-     * Fortschreibung von $mw_cfg (Zeile "$mw_neu = $mw_cfg;"). Jede Pruefung
-     * oben hat die Form "beanstandet -> keine Zuweisung, sonst zuweisen".
-     * Ein beanstandetes Feld traegt in $mw_neu also seinen BISHERIGEN Wert;
-     * gespeichert wird nichts Ungeprueftes. Die Beanstandung erscheint
-     * trotzdem, und die Meldung sagt, dass nicht alles uebernommen wurde.
-     *
-     * Fuer die zurueckgespielte Sicherungsdatei gilt weiterhin das
-     * Gegenteil: dort aendert eine halb gueltige Datei GAR NICHTS
-     * (mo_sicherung_lesen()). Eine Datei ist ein Ganzes, ein Formular nicht.
-     * ============================================================== */
-    if (mo_config_speichern($mw_neu)) {
+    if ($mw_mangel) {
+        /* U3 (Nr. 16): nichts speichern; U4 (X-2): die Eingaben reisen mit. */
+        $mw_fehler[] = mo_t('TEXT.NICHTS_GESPEICHERT');
+        $mw_falsch = array();
+        foreach ($mw_mangel as $mw_e) { $mw_fehler[] = $mw_e['text']; $mw_falsch[] = $mw_e['feld']; }
+        $mw_eingaben = mw_eingaben_sammeln('einst', $mw_falsch);
+        mo_log('Einstellungen beanstandet (' . count($mw_mangel) . ') - es wurde nichts gespeichert.');
+    } elseif (mo_config_speichern($mw_neu)) {
         $mw_cfg = mo_config();
-        $mw_saved = true;
+        $mw_ok[] = '<b>' . mw_e(mo_t('TEXT.KONFIGURATION_GESPEICHERT')) . '</b> '
+                 . mw_e(mo_t('TEXT.ZUGANGSDATEN_MIT_DATEIRECHTEN_0600'));
     } else {
         $mw_fehler[] = sprintf(mo_t('TEXT.FEHLER_SCHREIBEN'), mw_e($mw_cfgfile));
     }
     $mw_tab = 'tab-settings';
+}
+mo_nennform('datei');
+
+/* --- U2: jeder POST endet hier mit 303 und der Einmalmeldung; ein GET liest sie. */
+if ($mw_war_post) {
+    if (mo_flash_schreiben(array('tab' => $mw_tab, 'ok' => $mw_ok, 'warn' => $mw_warn,
+                                 'fehler' => $mw_fehler, 'eingaben' => $mw_eingaben))) {
+        header('Location: index.php?form=' . substr($mw_tab, 4), true, 303);
+        exit;
+    }
+    // Laesst sie sich nicht schreiben, zeigt die Seite das Ergebnis sofort.
+    mo_log('Die Einmalmeldung liess sich nicht schreiben (' . $mw_p['flash'] . ') - Ergebnis ohne Umleitung gezeigt.');
+} else {
+    $mw_flash = mo_flash_lesen();
+    if (is_array($mw_flash)) {
+        foreach (array('ok' => 'mw_ok', 'warn' => 'mw_warn', 'fehler' => 'mw_fehler') as $mw_k => $mw_v) {
+            if (isset($mw_flash[$mw_k]) && is_array($mw_flash[$mw_k])) {
+                foreach ($mw_flash[$mw_k] as $mw_m) { if (is_string($mw_m)) { ${$mw_v}[] = $mw_m; } }
+            }
+        }
+        if (isset($mw_flash['eingaben']['formular'], $mw_flash['eingaben']['werte'], $mw_flash['eingaben']['falsch'])
+            && is_array($mw_flash['eingaben']['werte']) && is_array($mw_flash['eingaben']['falsch'])) {
+            $mw_eingaben = $mw_flash['eingaben'];
+        }
+        if (!isset($_GET['form']) && isset($mw_flash['tab']) && is_string($mw_flash['tab'])
+            && preg_match($mw_muster, $mw_flash['tab'])) {
+            $mw_tab = $mw_flash['tab'];
+        }
+    }
+}
+
+/* X-2: Anzeige aus den Eingaben statt aus der Konfiguration - nur fuer das
+ * beanstandete Formular und nur im GET direkt nach der Beanstandung. */
+function mw_x2($formular)
+{
+    global $mw_eingaben;
+    return is_array($mw_eingaben) && isset($mw_eingaben['formular']) && $mw_eingaben['formular'] === $formular;
+}
+function mw_wert($formular, $feld, $gespeichert)
+{
+    global $mw_eingaben;
+    if (mw_x2($formular)) {
+        return isset($mw_eingaben['werte'][$feld]) && is_string($mw_eingaben['werte'][$feld])
+            ? $mw_eingaben['werte'][$feld] : '';
+    }
+    return (string) $gespeichert;
+}
+function mw_haken($formular, $feld, $gespeichert)
+{
+    global $mw_eingaben;
+    if (mw_x2($formular)) { return isset($mw_eingaben['werte'][$feld]); }
+    return !empty($gespeichert);
+}
+/** Das Merkmal am beanstandeten Feld: rot umrandet und fuer Vorleseprogramme markiert. */
+function mw_falsch($feld)
+{
+    global $mw_eingaben;
+    return (is_array($mw_eingaben) && isset($mw_eingaben['falsch']) && is_array($mw_eingaben['falsch'])
+            && in_array($feld, $mw_eingaben['falsch'], true)) ? ' class="sm-beanstandet" aria-invalid="true"' : '';
 }
 
 /* ================= Anzeigedaten ================= */
@@ -447,7 +613,10 @@ if ($mw_ist_post && isset($_POST['save'])) {
 $mw_notify = is_array($mw_cfg['notify']) ? $mw_cfg['notify'] : array();
 $mw_notify += array('audio' => 0, 'push' => 0, 'fehler' => 1, 'fertig' => 1, 'messer' => 1, 'akku' => 0);
 $mw_tts = is_array($mw_cfg['tts']) ? $mw_cfg['tts'] : array();
-$mw_tts += array('mode' => 'musicserver', 'ip' => '', 'port' => 7091, 'zones' => '1', 'volume' => 8, 'lang' => 'de', 'template' => '');
+$mw_tts += array('mode' => 'musicserver', 'ip' => '', 'port' => 7091, 'zones' => '1', 'volume' => 8, 'lang' => 'de', 'template' => '',
+                 'alexa_geraet' => '', 'alexa_token' => '', 'alexa_laut' => -1);
+/* C7 (X-3): wuerde die eigene Sicherung abgewiesen? Nur Namen. */
+$mw_sich_mangel = mo_sicherung_mangel();
 $mw_list = mo_mowers();
 $mw_states = array();
 foreach ($mw_list as $mw_k => $mw_r) { $mw_states[$mw_k] = mo_state($mw_k); }
@@ -566,11 +735,15 @@ $mw_host = mw_e(isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : '<loxberr
     padding-right: 32px; cursor: pointer; }
 .sm-tbl select { padding-right: 28px; background-position: right 7px center; }
 .sm-pruef td:first-child { width: 42px; text-align: center; font-size: 1.1em; }
+/* X-2 (Durchgang 01.10.2026): das beanstandete Feld. */
+.sm-wrap .sm-beanstandet { border: 2px solid #c62828 !important; background: #fff5f5 !important; }
 </style>
 <div class="sm-wrap">
 
-<?php if ($mw_saved && $mw_fehler) { ?><div class="sm-alert sm-warn"><b><?php echo mw_e(mo_t('TEXT.TEILWEISE_GESPEICHERT')); ?></b> <?php echo mw_e(mo_t('TEXT.TEILWEISE_GESPEICHERT_TEXT')); ?></div><?php } elseif ($mw_saved) { ?><div class="sm-alert sm-ok"><b><?php echo mw_e(mo_t('TEXT.KONFIGURATION_GESPEICHERT')); ?></b> <?php echo mw_e(mo_t('TEXT.ZUGANGSDATEN_MIT_DATEIRECHTEN_0600')); ?></div><?php } ?>
-<?php if ($mw_note !== '') { ?><div class="sm-alert sm-ok"><?php echo $mw_note; ?></div><?php } ?>
+<?php /* U2/U3 (Durchgang 01.10.2026): die Meldungen kommen aus der Einmalmeldung.
+       * "Gespeichert, aber nicht alles uebernommen" gibt es nicht mehr (Nr. 16). */ ?>
+<?php foreach ($mw_ok as $mw_m) { ?><div class="sm-alert sm-ok"><?php echo $mw_m; ?></div><?php } ?>
+<?php foreach ($mw_warn as $mw_m) { ?><div class="sm-alert sm-warn"><?php echo $mw_m; ?></div><?php } ?>
 <?php if ($mw_fehler) { ?>
 <div class="sm-alert sm-err"><b><?php echo mw_e(mo_t('TEXT.FEHLER_4')); ?></b>
 <ul style="margin:6px 0 0 18px;padding:0;">
@@ -636,6 +809,14 @@ $mw_host = mw_e(isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : '<loxberr
    Der Index steht ausgeschrieben, siehe die Begruendung am Speicher-Handler. */
 $mw_zeilen = is_array($mw_cfg['mowers']) ? array_values($mw_cfg['mowers']) : array();
 $mw_anz = min(mo_max_maeher(), count($mw_zeilen) + 1);
+/* X-2: nach einer Beanstandung so viele Zeilen, wie eingetippt wurden. */
+if (mw_x2('einst')) {
+    foreach (array_keys($mw_eingaben['werte']) as $mw_ek) {
+        if (preg_match('/^m_[a-z]+\[([0-9])\]$/', (string) $mw_ek, $mw_em)) {
+            $mw_anz = max($mw_anz, min(mo_max_maeher(), (int) $mw_em[1] + 1));
+        }
+    }
+}
 for ($mw_i = 0; $mw_i < $mw_anz; $mw_i++) {
     $mw_r = isset($mw_zeilen[$mw_i]) ? (array) $mw_zeilen[$mw_i] : array();
     $mw_r += array('name' => '', 'ip' => '', 'user' => '', 'pass' => '',
@@ -644,13 +825,13 @@ for ($mw_i = 0; $mw_i < $mw_anz; $mw_i++) {
 ?>
 <tr>
 <td><?php echo $mw_i + 1; ?></td>
-<td><input data-role="none" type="text" name="m_name[<?php echo (int) $mw_i; ?>]" value="<?php echo mw_e($mw_r['name']); ?>" placeholder="<?php echo $mw_leer ? mw_e(mo_t('TEXT.PH_NAME')) : ''; ?>"></td>
-<td><input data-role="none" type="text" name="m_ip[<?php echo (int) $mw_i; ?>]" value="<?php echo mw_e($mw_r['ip']); ?>" placeholder="<?php echo $mw_leer ? mw_e(mo_t('TEXT.PH_IP')) : ''; ?>"></td>
-<td><input data-role="none" type="text" name="m_user[<?php echo (int) $mw_i; ?>]" value="<?php echo mw_e($mw_r['user']); ?>" placeholder="admin"></td>
-<td><input data-role="none" type="password" name="m_pass[<?php echo (int) $mw_i; ?>]" value="" placeholder="<?php echo $mw_r['pass'] !== '' ? mw_e(mo_t('TEXT.PH_GESPEICHERT')) : ''; ?>" autocomplete="new-password"></td>
-<td><input data-role="none" type="number" name="m_bhours[<?php echo (int) $mw_i; ?>]" value="<?php echo mw_e((string) $mw_r['blade_hours']); ?>" min="1" max="2000" placeholder="<?php echo (int) $mw_cfg['blade_hours']; ?>"></td>
-<td><input data-role="none" type="number" name="m_bbase[<?php echo (int) $mw_i; ?>]" value="<?php echo mw_e((string) $mw_r['blade_base']); ?>" min="0" max="100000" placeholder="<?php echo (int) $mw_cfg['blade_base']; ?>"></td>
-<td style="text-align:center;"><?php if (!$mw_leer) { ?><input data-role="none" type="checkbox" name="m_del[<?php echo (int) $mw_i; ?>]" value="1" title="<?php echo mw_e(mo_t('TEXT.LOESCHEN_HILFE')); ?>"><?php } ?></td>
+<td><input data-role="none" type="text" name="m_name[<?php echo (int) $mw_i; ?>]"<?php echo mw_falsch('m_name[' . $mw_i . ']'); ?> value="<?php echo mw_e(mw_wert('einst', 'm_name[' . $mw_i . ']', $mw_r['name'])); ?>" placeholder="<?php echo $mw_leer ? mw_e(mo_t('TEXT.PH_NAME')) : ''; ?>"></td>
+<td><input data-role="none" type="text" name="m_ip[<?php echo (int) $mw_i; ?>]"<?php echo mw_falsch('m_ip[' . $mw_i . ']'); ?> value="<?php echo mw_e(mw_wert('einst', 'm_ip[' . $mw_i . ']', $mw_r['ip'])); ?>" placeholder="<?php echo $mw_leer ? mw_e(mo_t('TEXT.PH_IP')) : ''; ?>"></td>
+<td><input data-role="none" type="text" name="m_user[<?php echo (int) $mw_i; ?>]"<?php echo mw_falsch('m_user[' . $mw_i . ']'); ?> value="<?php echo mw_e(mw_wert('einst', 'm_user[' . $mw_i . ']', $mw_r['user'])); ?>" placeholder="admin"></td>
+<td><input data-role="none" type="password" name="m_pass[<?php echo (int) $mw_i; ?>]"<?php echo mw_falsch('m_pass[' . $mw_i . ']'); ?> value="" placeholder="<?php echo $mw_r['pass'] !== '' ? mw_e(mo_t('TEXT.PH_GESPEICHERT')) : ''; ?>" autocomplete="new-password"></td>
+<td><input data-role="none" type="number" name="m_bhours[<?php echo (int) $mw_i; ?>]"<?php echo mw_falsch('m_bhours[' . $mw_i . ']'); ?> value="<?php echo mw_e(mw_wert('einst', 'm_bhours[' . $mw_i . ']', (string) $mw_r['blade_hours'])); ?>" min="1" max="2000" placeholder="<?php echo (int) $mw_cfg['blade_hours']; ?>"></td>
+<td><input data-role="none" type="number" name="m_bbase[<?php echo (int) $mw_i; ?>]"<?php echo mw_falsch('m_bbase[' . $mw_i . ']'); ?> value="<?php echo mw_e(mw_wert('einst', 'm_bbase[' . $mw_i . ']', (string) $mw_r['blade_base'])); ?>" min="0" max="100000" placeholder="<?php echo (int) $mw_cfg['blade_base']; ?>"></td>
+<td style="text-align:center;"><?php if (!$mw_leer) { ?><input data-role="none" type="checkbox" name="m_del[<?php echo (int) $mw_i; ?>]" value="1"<?php echo mw_haken('einst', 'm_del[' . $mw_i . ']', false) ? ' checked' : ''; ?> title="<?php echo mw_e(mo_t('TEXT.LOESCHEN_HILFE')); ?>"><?php } ?></td>
 </tr>
 <?php } ?>
 </table>
@@ -662,18 +843,18 @@ for ($mw_i = 0; $mw_i < $mw_anz; $mw_i++) {
 <div class="sm-row">
     <div>
         <label><?php echo mw_e(mo_t('TEXT.STATUS_CACHE_SEKUNDEN')); ?></label>
-        <input data-role="none" type="number" name="cache_sec" value="<?php echo (int) $mw_cfg['cache_sec']; ?>" min="5" max="300">
+        <input data-role="none" type="number" name="cache_sec"<?php echo mw_falsch('cache_sec'); ?> value="<?php echo mw_e(mw_wert('einst', 'cache_sec', (int) $mw_cfg['cache_sec'])); ?>" min="5" max="300">
         <div class="sm-small"><?php echo mw_e(sprintf(mo_t('TEXT.EMPFEHLUNG_20_EINE_LOXONE_ABFRAGE_'), mo_polling())); ?></div>
     </div>
     <div>
         <label><?php echo mw_e(mo_t('TEXT.MESSERWECHSEL_INTERVALL_BETRIEBSST')); ?></label>
-        <input data-role="none" type="number" name="blade_hours" value="<?php echo (int) $mw_cfg['blade_hours']; ?>" min="1" max="2000">
+        <input data-role="none" type="number" name="blade_hours"<?php echo mw_falsch('blade_hours'); ?> value="<?php echo mw_e(mw_wert('einst', 'blade_hours', (int) $mw_cfg['blade_hours'])); ?>" min="1" max="2000">
         <div class="sm-small"><?php echo mw_e(mo_t('TEXT.HERSTELLERANGABE_OFT_150250_H')); ?>
              &mdash; <?php echo mw_e(mo_t('TEXT.MESSER_VORGABE')); ?></div>
     </div>
     <div>
         <label><?php echo mw_e(mo_t('TEXT.NULLPUNKT_STUNDEN_BEIM_LETZTEN_WEC')); ?></label>
-        <input data-role="none" type="number" name="blade_base" value="<?php echo (int) $mw_cfg['blade_base']; ?>" min="0" max="100000">
+        <input data-role="none" type="number" name="blade_base"<?php echo mw_falsch('blade_base'); ?> value="<?php echo mw_e(mw_wert('einst', 'blade_base', (int) $mw_cfg['blade_base'])); ?>" min="0" max="100000">
         <div class="sm-small"><?php echo mo_t('TEXT.WIRD_BEIM_QUITTIEREN_AUTOMATISCH_G'); ?> <span class="sm-mono">?cmd=blade_reset</span>).
              &mdash; <?php echo mw_e(mo_t('TEXT.MESSER_VORGABE')); ?></div>
     </div>
@@ -682,31 +863,31 @@ for ($mw_i = 0; $mw_i < $mw_anz; $mw_i++) {
 <h2><?php echo mw_e(mo_t('TEXT.MELDUNGEN')); ?></h2>
 <div style="margin-bottom:10px;">
     <label style="display:inline-flex;align-items:center;gap:6px;margin-right:24px;">
-        <input data-role="none" type="checkbox" name="notify_audio"<?php echo !empty($mw_notify['audio']) ? ' checked' : ''; ?>> <?php echo mw_e(mo_t('TEXT.AUDIOAUSGABE_AKTIV')); ?>
+        <input data-role="none" type="checkbox" name="notify_audio"<?php echo mw_haken('einst', 'notify_audio', $mw_notify['audio']) ? ' checked' : ''; ?>> <?php echo mw_e(mo_t('TEXT.AUDIOAUSGABE_AKTIV')); ?>
     </label>
     <label style="display:inline-flex;align-items:center;gap:6px;">
-        <input data-role="none" type="checkbox" name="notify_push"<?php echo !empty($mw_notify['push']) ? ' checked' : ''; ?>> <?php echo mw_e(mo_t('TEXT.PUSH_NACHRICHT_AKTIV')); ?>
+        <input data-role="none" type="checkbox" name="notify_push"<?php echo mw_haken('einst', 'notify_push', $mw_notify['push']) ? ' checked' : ''; ?>> <?php echo mw_e(mo_t('TEXT.PUSH_NACHRICHT_AKTIV')); ?>
     </label>
     <div class="sm-small"><?php echo mo_t('TEXT.DIE_ANSAGE_SPRICHT_DAS_PLUGIN_SELB'); ?> <span class="sm-mono">ANN=1</span>.</div>
 </div>
 <div>
     <label style="display:inline-flex;align-items:center;gap:6px;margin-right:20px;">
-        <input data-role="none" type="checkbox" name="n_fehler"<?php echo !empty($mw_notify['fehler']) ? ' checked' : ''; ?>> <?php echo mw_e(mo_t('TEXT.STRUNG_SCHLEIFENSIGNAL_VERLOREN')); ?>
+        <input data-role="none" type="checkbox" name="n_fehler"<?php echo mw_haken('einst', 'n_fehler', $mw_notify['fehler']) ? ' checked' : ''; ?>> <?php echo mw_e(mo_t('TEXT.STRUNG_SCHLEIFENSIGNAL_VERLOREN')); ?>
     </label>
     <label style="display:inline-flex;align-items:center;gap:6px;margin-right:20px;">
-        <input data-role="none" type="checkbox" name="n_fertig"<?php echo !empty($mw_notify['fertig']) ? ' checked' : ''; ?>> <?php echo mw_e(mo_t('TEXT.MHEN_BEENDET')); ?>
+        <input data-role="none" type="checkbox" name="n_fertig"<?php echo mw_haken('einst', 'n_fertig', $mw_notify['fertig']) ? ' checked' : ''; ?>> <?php echo mw_e(mo_t('TEXT.MHEN_BEENDET')); ?>
     </label>
     <label style="display:inline-flex;align-items:center;gap:6px;margin-right:20px;">
-        <input data-role="none" type="checkbox" name="n_messer"<?php echo !empty($mw_notify['messer']) ? ' checked' : ''; ?>> <?php echo mw_e(mo_t('TEXT.MESSERWECHSEL_FLLIG')); ?>
+        <input data-role="none" type="checkbox" name="n_messer"<?php echo mw_haken('einst', 'n_messer', $mw_notify['messer']) ? ' checked' : ''; ?>> <?php echo mw_e(mo_t('TEXT.MESSERWECHSEL_FLLIG')); ?>
     </label>
     <label style="display:inline-flex;align-items:center;gap:6px;">
-        <input data-role="none" type="checkbox" name="n_akku"<?php echo !empty($mw_notify['akku']) ? ' checked' : ''; ?>> <?php echo mw_e(mo_t('TEXT.AKKU_UNTER_20_AUERHALB_DER_STATION')); ?>
+        <input data-role="none" type="checkbox" name="n_akku"<?php echo mw_haken('einst', 'n_akku', $mw_notify['akku']) ? ' checked' : ''; ?>> <?php echo mw_e(mo_t('TEXT.AKKU_UNTER_20_AUERHALB_DER_STATION')); ?>
     </label>
 </div>
 
 <h2><?php echo mw_e(mo_t('TEXT.H_STATISTIK')); ?></h2>
 <label style="display:inline-flex;align-items:center;gap:6px;">
-    <input data-role="none" type="checkbox" name="stat_ein"<?php echo !empty($mw_cfg['stat_ein']) ? ' checked' : ''; ?>> <?php echo mw_e(mo_t('TEXT.STAT_EIN')); ?>
+    <input data-role="none" type="checkbox" name="stat_ein"<?php echo mw_haken('einst', 'stat_ein', $mw_cfg['stat_ein']) ? ' checked' : ''; ?>> <?php echo mw_e(mo_t('TEXT.STAT_EIN')); ?>
 </label>
 <div class="sm-hilfe"><?php echo mo_t('TEXT.STAT_HILFE'); ?></div>
 <?php if (!empty($mw_cfg['stat_ein'])) { ?>
@@ -722,41 +903,65 @@ for ($mw_i = 0; $mw_i < $mw_anz; $mw_i++) {
 <div class="sm-row">
     <div>
         <label><?php echo mw_e(mo_t('TEXT.AUDIO_AUSGABE')); ?></label>
-        <select data-role="none" name="tts_mode" id="tts_mode" onchange="mwTtsMode()">
-            <option value="musicserver"<?php echo $mw_tts['mode'] === 'musicserver' ? ' selected' : ''; ?>><?php echo mw_e(mo_t('TEXT.LOXONE_MUSIC_SERVER_KLASSISCH')); ?></option>
-            <option value="ms4h"<?php echo $mw_tts['mode'] === 'ms4h' ? ' selected' : ''; ?>><?php echo mw_e(mo_t('TEXT.AUDIOSERVER4HOME_MUSICSERVER4HOME')); ?></option>
-            <option value="audioserver"<?php echo $mw_tts['mode'] === 'audioserver' ? ' selected' : ''; ?>><?php echo mw_e(mo_t('TEXT.ORIGINAL_LOXONE_AUDIOSERVER_VIA_LO')); ?></option>
-            <option value="custom"<?php echo $mw_tts['mode'] === 'custom' ? ' selected' : ''; ?>><?php echo mw_e(mo_t('TEXT.EIGENE_URL_VORLAGE')); ?></option>
+        <?php $mw_modus = mw_wert('einst', 'tts_mode', $mw_tts['mode']); ?>
+        <select data-role="none" name="tts_mode" id="tts_mode" onchange="mwTtsMode()"<?php echo mw_falsch('tts_mode'); ?>>
+            <option value="musicserver"<?php echo $mw_modus === 'musicserver' ? ' selected' : ''; ?>><?php echo mw_e(mo_t('TEXT.LOXONE_MUSIC_SERVER_KLASSISCH')); ?></option>
+            <option value="ms4h"<?php echo $mw_modus === 'ms4h' ? ' selected' : ''; ?>><?php echo mw_e(mo_t('TEXT.AUDIOSERVER4HOME_MUSICSERVER4HOME')); ?></option>
+            <option value="audioserver"<?php echo $mw_modus === 'audioserver' ? ' selected' : ''; ?>><?php echo mw_e(mo_t('TEXT.ORIGINAL_LOXONE_AUDIOSERVER_VIA_LO')); ?></option>
+            <option value="custom"<?php echo $mw_modus === 'custom' ? ' selected' : ''; ?>><?php echo mw_e(mo_t('TEXT.EIGENE_URL_VORLAGE')); ?></option>
+            <option value="alexang"<?php echo $mw_modus === 'alexang' ? ' selected' : ''; ?>><?php echo mw_e(mo_t('TEXT.ALEXA_NG_AUSGABE')); ?></option>
         </select>
     </div>
     <div>
         <label><?php echo mw_e(mo_t('TEXT.IP_DES_AUDIO_SERVERS')); ?></label>
-        <input data-role="none" type="text" name="tts_ip" value="<?php echo mw_e($mw_tts['ip']); ?>" placeholder="<?php echo mw_e(mo_t('TEXT.PH_TTS_IP')); ?>">
+        <input data-role="none" type="text" name="tts_ip"<?php echo mw_falsch('tts_ip'); ?> value="<?php echo mw_e(mw_wert('einst', 'tts_ip', $mw_tts['ip'])); ?>" placeholder="<?php echo mw_e(mo_t('TEXT.PH_TTS_IP')); ?>">
     </div>
     <div>
         <label><?php echo mw_e(mo_t('TEXT.PORT')); ?></label>
-        <input data-role="none" type="number" name="tts_port" value="<?php echo (int) $mw_tts['port']; ?>" min="1" max="65535">
+        <input data-role="none" type="number" name="tts_port"<?php echo mw_falsch('tts_port'); ?> value="<?php echo mw_e(mw_wert('einst', 'tts_port', (int) $mw_tts['port'])); ?>" min="1" max="65535">
     </div>
 </div>
 <div class="sm-row">
     <div>
         <label><?php echo mw_e(mo_t('TEXT.ZONEN')); ?></label>
-        <input data-role="none" type="text" name="tts_zones" value="<?php echo mw_e($mw_tts['zones']); ?>" placeholder="2,4,6">
+        <input data-role="none" type="text" name="tts_zones"<?php echo mw_falsch('tts_zones'); ?> value="<?php echo mw_e(mw_wert('einst', 'tts_zones', $mw_tts['zones'])); ?>" placeholder="2,4,6">
         <div class="sm-small"><?php echo mo_t('TEXT.ZONEN_HILFE'); ?></div>
     </div>
     <div>
         <label><?php echo mw_e(mo_t('TEXT.LAUTSTRKE')); ?></label>
-        <input data-role="none" type="number" name="tts_volume" value="<?php echo (int) $mw_tts['volume']; ?>" min="1" max="100">
+        <input data-role="none" type="number" name="tts_volume"<?php echo mw_falsch('tts_volume'); ?> value="<?php echo mw_e(mw_wert('einst', 'tts_volume', (int) $mw_tts['volume'])); ?>" min="1" max="100">
     </div>
     <div>
         <label><?php echo mw_e(mo_t('TEXT.SPRACHE')); ?></label>
-        <input data-role="none" type="text" name="tts_lang" value="<?php echo mw_e($mw_tts['lang']); ?>" maxlength="2">
+        <input data-role="none" type="text" name="tts_lang"<?php echo mw_falsch('tts_lang'); ?> value="<?php echo mw_e(mw_wert('einst', 'tts_lang', $mw_tts['lang'])); ?>" maxlength="5">
     </div>
 </div>
 <div id="tts_template_row">
     <label><?php echo mw_e(mo_t('TEXT.URL_VORLAGE_FR_AUDIOSERVER4HOME_MS')); ?></label>
-    <textarea data-role="none" name="tts_template" id="tts_template" rows="2" placeholder="http://{ip}:{port}/tts?text={text}&amp;zone={zones}&amp;vol={vol}"><?php echo mw_e($mw_tts['template']); ?></textarea>
+    <textarea data-role="none" name="tts_template" id="tts_template" rows="2"<?php echo mw_falsch('tts_template'); ?> placeholder="http://{ip}:{port}/tts?text={text}&amp;zone={zones}&amp;vol={vol}"><?php echo mw_e(mw_wert('einst', 'tts_template', $mw_tts['template'])); ?></textarea>
     <div class="sm-small"><?php echo mw_e(mo_t('TEXT.PLATZHALTER')); ?> <span class="sm-mono"><?php echo mw_e(mo_t('TEXT.IP_PORT_ZONES_VOL_LANG_TEXT')); ?></span><?php echo mw_e(mo_t('TEXT.LEER_STANDARD_VORLAGE')); ?></div>
+</div>
+<?php /* C9 (Ansage-2, Durchgang 01.10.2026): die Felder fuer Alexa-NG. Das
+       * Sprechtoken ist ein Kennwortfeld: nie angezeigt, leer lassen behaelt
+       * es, der Haken loescht es; es reist nie in die Einmalmeldung. */
+    $mw_atl = (string) mw_wert('einst', 'tts_alexa_laut', (int) $mw_tts['alexa_laut'] >= 0 ? (int) $mw_tts['alexa_laut'] : ''); ?>
+<div id="tts_alexa_row" style="<?php echo $mw_modus === 'alexang' ? '' : 'display:none;'; ?>">
+<div class="sm-hinweis"><?php echo mo_t('TEXT.ALEXA_HINWEIS'); ?></div>
+<div class="sm-row">
+    <div>
+        <label><?php echo mw_e(mo_t('TEXT.ALEXA_GERAET')); ?></label>
+        <input data-role="none" type="text" name="tts_alexa_geraet"<?php echo mw_falsch('tts_alexa_geraet'); ?> value="<?php echo mw_e(mw_wert('einst', 'tts_alexa_geraet', $mw_tts['alexa_geraet'])); ?>" placeholder="<?php echo mw_e(mo_t('TEXT.ALEXA_GERAET_PH')); ?>">
+    </div>
+    <div>
+        <label><?php echo mw_e(mo_t('TEXT.ALEXA_LAUT')); ?></label>
+        <input data-role="none" type="number" name="tts_alexa_laut"<?php echo mw_falsch('tts_alexa_laut'); ?> value="<?php echo mw_e($mw_atl); ?>" min="0" max="100" placeholder="<?php echo mw_e(mo_t('TEXT.ALEXA_LAUT_PH')); ?>">
+    </div>
+    <div>
+        <label><?php echo mw_e(mo_t('TEXT.ALEXA_TOKEN')); ?></label>
+        <input data-role="none" type="password" name="tts_alexa_token"<?php echo mw_falsch('tts_alexa_token'); ?> value="" autocomplete="new-password" placeholder="<?php echo (string) $mw_tts['alexa_token'] !== '' ? mw_e(sprintf(mo_t('TEXT.ALEXA_TOKEN_GESPEICHERT'), strlen((string) $mw_tts['alexa_token']))) : ''; ?>">
+        <label style="display:inline-flex;align-items:center;gap:6px;font-weight:400;"><input data-role="none" type="checkbox" name="tts_alexa_loeschen" value="1"<?php echo mw_haken('einst', 'tts_alexa_loeschen', false) ? ' checked' : ''; ?>> <?php echo mw_e(mo_t('TEXT.ALEXA_TOKEN_LOESCHEN')); ?></label>
+    </div>
+</div>
 </div>
 <div id="tts_audioserver_hint" class="sm-alert sm-info" style="display:none;">
     <?php echo mo_t('TEXT.DER_ORIGINALE_LOXONE_AUDIOSERVER_B'); ?> <span class="sm-mono">ANN=1</span>.
@@ -794,6 +999,9 @@ for ($mw_i = 0; $mw_i < $mw_anz; $mw_i++) {
 <h2><?php echo mw_e(mo_t('TEXT.H_SICHERUNG')); ?></h2>
 <div class="sm-hinweis"><?php echo mo_t('TEXT.SICH_ERKLAERUNG'); ?></div>
 <div class="sm-warnung"><?php echo mo_t('TEXT.SICH_WARNUNG'); ?></div>
+<?php if ($mw_sich_mangel) { ?>
+<div class="sm-alert sm-warn"><?php echo sprintf(mo_t('TEXT.SICH_X3_WARNUNG'), mw_e(implode(', ', $mw_sich_mangel))); ?></div>
+<?php } ?>
 <div class="sm-knopfreihe">
   <!-- ZWEI GETRENNTE Formulare. Das Sichern schickt einen Download und ruft
        exit auf; das Zurueckspielen braucht enctype="multipart/form-data".
@@ -823,16 +1031,18 @@ for ($mw_i = 0; $mw_i < $mw_anz; $mw_i++) {
 <input data-role="none" type="hidden" name="mqtt_save" value="1">
 <input data-role="none" type="hidden" name="activetab" value="tab-mqtt">
 <h2><?php echo mw_e(mo_t('TEXT.MQTT_OPTIONAL')); ?></h2>
-<?php if (mo_mqtt_gateway_autostart() === false) { ?>
+<?php /* U6 (Durchgang 01.10.2026): "Es wird gesendet" nur, wenn dieses Plugin sendet. */
+if (!empty($mw_cfg['mqtt_enabled']) && mo_mqtt_gateway_autostart() === false) { ?>
 <div class="sm-warnung"><b>MQTT:</b> <?php echo mo_t('TEXT.W_AUTOSTART'); ?></div>
 <?php } ?>
 <label style="display:inline-flex;align-items:center;gap:6px;">
-    <input data-role="none" type="checkbox" name="mqtt_enabled"<?php echo !empty($mw_cfg['mqtt_enabled']) ? ' checked' : ''; ?>> <?php echo mw_e(mo_t('TEXT.ZUSTAND_PER_MQTT_VERFFENTLICHEN')); ?>
+    <input data-role="none" type="checkbox" name="mqtt_enabled"<?php echo mw_haken('mqtt', 'mqtt_enabled', $mw_cfg['mqtt_enabled']) ? ' checked' : ''; ?>> <?php echo mw_e(mo_t('TEXT.ZUSTAND_PER_MQTT_VERFFENTLICHEN')); ?>
 </label>
 <div class="sm-feld" style="margin-top:6px;max-width:520px;">
     <label><?php echo mw_e(mo_t('TEXT.TOPIC_PRFIX')); ?></label>
-    <input data-role="none" type="text" name="mqtt_topic" value="<?php echo mw_e($mw_cfg['mqtt_topic']); ?>" placeholder="maeher">
+    <input data-role="none" type="text" name="mqtt_topic"<?php echo mw_falsch('mqtt_topic'); ?> value="<?php echo mw_e(mw_wert('mqtt', 'mqtt_topic', $mw_cfg['mqtt_topic'])); ?>" placeholder="maeher">
 </div>
+<div class="sm-hilfe"><?php echo mo_t('TEXT.MQTT_WECHSEL_HILFE'); ?></div>
 <div class="sm-legende">
 <span><i class="sm-punkt sm-b-aktion"></i> <?php echo mw_e(mo_t('LEGENDE.AKTION')); ?></span>
 </div>
@@ -851,19 +1061,26 @@ for ($mw_i = 0; $mw_i < $mw_anz; $mw_i++) {
 $mw_gw = mo_mqtt_gateway_info();
 $mw_gwf = ($mw_gw === null) ? 0 : (int) $mw_gw['fassung'];
 $mw_praefix = mo_mqtt_praefix($mw_cfg['mqtt_topic']);
+/* M7 (Durchgang 01.10.2026): traegt die Abodatei des Plugins das Abo, ist
+ * unter Gateway V1 nichts von Hand einzutragen. */
+list(, $mw_abo_da) = mo_abo_datei($mw_praefix);
+$mw_abo_klasse = ($mw_gwf >= 2 || $mw_abo_da) ? 'sm-hinweis' : 'sm-warnung';
+$mw_abo_html = ($mw_abo_da && $mw_gwf < 2) ? mo_t('TEXT.ABO_DATEI') : mo_abo_text();
 ?>
 <h2><?php echo mw_e(mo_t('TEXT.H_ABO')); ?></h2>
-<div class="<?php echo $mw_gwf >= 2 ? 'sm-hinweis' : 'sm-warnung'; ?>">
+<div class="<?php echo $mw_abo_klasse; ?>">
 <b><?php echo mw_e(mo_t('TEXT.ABO_TITEL')); ?></b><br>
 <span class="sm-mono"><?php echo mw_e($mw_praefix); ?>/#</span><br>
-<?php echo mo_abo_text(); ?>
+<?php echo $mw_abo_html; ?>
 </div>
 
 <h2><?php echo mw_e(mo_t('TEXT.H_THEMEN')); ?></h2>
 <div class="sm-hilfe"><?php echo mo_t('TEXT.THEMEN_HILFE'); ?></div>
 <div class="sm-breit">
 <table class="sm-tbl">
-<tr><th style="width:38%;"><?php echo mw_e(mo_t('TEXT.THEMA')); ?></th><th><?php echo mw_e(mo_t('TEXT.BEDEUTUNG')); ?></th></tr>
+<?php /* U7 (Durchgang 01.10.2026, Entscheidung Nr. 3): die Spalte "retained" kommt
+       * aus mo_mqtt_retain() - derselben Quelle wie der Sendecode. */ ?>
+<tr><th style="width:38%;"><?php echo mw_e(mo_t('TEXT.THEMA')); ?></th><th style="width:90px;"><?php echo mw_e(mo_t('TEXT.RETAINED')); ?></th><th><?php echo mw_e(mo_t('TEXT.BEDEUTUNG')); ?></th></tr>
 <?php
 /* Die Tabelle entsteht aus DERSELBEN Quelle wie der Sendecode - die
  * Pruefzeile im Reiter Test haelt beide gegeneinander. */
@@ -887,10 +1104,10 @@ foreach ($mw_themen['maeher'] as $mw_th) {
         $mw_bed = sprintf(mo_t('TEXT.TH_OHNE'), $mw_th);
     }
 ?>
-<tr><td><span class="sm-mono"><?php echo mw_e($mw_praefix); ?>/<?php echo mw_e($mw_th); ?></span></td><td><?php echo mw_e($mw_bed); ?></td></tr>
+<tr><td><span class="sm-mono"><?php echo mw_e($mw_praefix); ?>/<?php echo mw_e($mw_th); ?></span></td><td><?php echo mw_e(mo_t(mo_mqtt_retain($mw_th) ? 'TEXT.JA' : 'TEXT.NEIN')); ?></td><td><?php echo mw_e($mw_bed); ?></td></tr>
 <?php } ?>
 <?php foreach ($mw_themen['anlage'] as $mw_th) { ?>
-<tr><td><span class="sm-mono"><?php echo mw_e($mw_praefix); ?>/<?php echo mw_e($mw_th); ?></span></td><td><?php echo mw_e(mo_t('TEXT.TH_' . strtoupper(str_replace('status/', '', $mw_th)))); ?></td></tr>
+<tr><td><span class="sm-mono"><?php echo mw_e($mw_praefix); ?>/<?php echo mw_e($mw_th); ?></span></td><td><?php echo mw_e(mo_t(mo_mqtt_retain($mw_th) ? 'TEXT.JA' : 'TEXT.NEIN')); ?></td><td><?php echo mw_e(mo_t('TEXT.TH_' . strtoupper(str_replace('status/', '', $mw_th)))); ?></td></tr>
 <?php } ?>
 </table>
 </div>
@@ -913,7 +1130,14 @@ foreach ($mw_themen['maeher'] as $mw_th) {
 <div class="sm-step"><b><?php echo mw_e(mo_t('TEXT.SCHRITT_1_VIRTUELLER_HTTP_EINGANG_')); ?></b> <?php echo mw_e(sprintf(mo_t('TEXT.ABFRAGE_ALLE_S'), mo_polling())); ?>
 <table class="sm-tbl">
 <tr><th><?php echo mw_e(mo_t('TEXT.EIGENSCHAFT')); ?></th><th><?php echo mw_e(mo_t('TEXT.WERT')); ?></th></tr>
-<tr><td>URL</td><td><span class="sm-mono">http://<?php echo $mw_host; ?>/plugins/<?php echo mw_e($mw_plugin); ?>/mower.php</span> <?php echo mw_e(mo_t('TEXT.MHER_2')); ?> <span class="sm-mono">?dev=2</span>)</td></tr>
+<?php /* U9 (Durchgang 01.10.2026): je eingerichtetem Maeher eine Adresse. */
+$mw_ml = mo_mowers();
+if (!$mw_ml) { ?>
+<tr><td>URL</td><td><span class="sm-mono">http://<?php echo $mw_host; ?>/plugins/<?php echo mw_e($mw_plugin); ?>/mower.php</span></td></tr>
+<?php }
+foreach ($mw_ml as $mw_mn => $mw_mm) { ?>
+<tr><td>URL <?php echo mw_e($mw_mm['name']); ?></td><td><span class="sm-mono">http://<?php echo $mw_host; ?>/plugins/<?php echo mw_e($mw_plugin); ?>/mower.php<?php echo $mw_mn > 1 ? '?dev=' . (int) $mw_mn : ''; ?></span></td></tr>
+<?php } ?>
 <tr><td><?php echo mw_e(mo_t('TEXT.ABFRAGEZYKLUS')); ?></td><td><?php echo mw_e(sprintf(mo_t('TEXT.SEKUNDEN_N'), mo_polling())); ?></td></tr>
 </table>
 <span class="sm-small"><?php echo mo_t('TEXT.DER_BISHERIGE_EINGANG_MIT'); ?> <span class="sm-mono">?user=...&amp;pass=...</span> <?php echo mw_e(mo_t('TEXT.KANN_DANACH_GELSCHT_WERDEN')); ?></span>
@@ -921,9 +1145,9 @@ foreach ($mw_themen['maeher'] as $mw_th) {
 
 <div class="sm-step"><b><?php echo mw_e(mo_t('TEXT.SCHRITT_2_ABO')); ?></b><br>
 <?php echo mo_t('TEXT.SCHRITT_2_ABO_TEXT'); ?>
-<div class="<?php echo $mw_gwf >= 2 ? 'sm-hinweis' : 'sm-warnung'; ?>">
+<div class="<?php echo $mw_abo_klasse; ?>">
 <span class="sm-mono"><?php echo mw_e($mw_praefix); ?>/#</span><br>
-<?php echo mo_abo_text(); ?>
+<?php echo $mw_abo_html; ?>
 </div>
 </div>
 
@@ -949,6 +1173,14 @@ foreach ($mw_felder as $mw_name => $mw_f) { ?>
 <tr><th><?php echo mw_e(mo_t('TEXT.EIGENSCHAFT')); ?></th><th><?php echo mw_e(mo_t('TEXT.WERT')); ?></th></tr>
 <tr><td><?php echo mw_e(mo_t('TEXT.ADRESSE_VIRTUELLER_AUSGANG')); ?></td><td><span class="sm-mono">http://<?php echo $mw_host; ?></span> &mdash; <b><?php echo mw_e(mo_t('TEXT.OHNE')); ?></b> <?php echo mw_e(mo_t('TEXT.BENUTZER_UND_PASSWORT')); ?></td></tr>
 </table>
+<?php
+/* U9 (Durchgang 01.10.2026, gemessen): bis 1.1.14 standen hier nur die
+ * Adressen fuer Maeher 1. Jetzt je eingerichtetem Maeher eine Tabelle; ab
+ * Maeher 2 mit &dev=<n>. */
+$mw_bml = mo_mowers();
+if (!$mw_bml) { $mw_bml = array(1 => array('name' => '')); }
+foreach ($mw_bml as $mw_bn => $mw_bm) { ?>
+<?php if (count($mw_bml) > 1) { ?><div class="sm-h3"><?php echo mw_e(sprintf(mo_t('TEXT.BEFEHLE_FUER'), (int) $mw_bn, $mw_bm['name'])); ?></div><?php } ?>
 <div class="sm-breit">
 <table class="sm-tbl">
 <tr><th style="width:52%;"><?php echo mw_e(mo_t('TEXT.BEFEHL_BEI_EIN')); ?></th><th><?php echo mw_e(mo_t('TEXT.WIRKUNG')); ?></th></tr>
@@ -968,10 +1200,12 @@ $mw_befehle = array(
     'blade_reset' => mo_t('TEXT.B_BLADE'),
 );
 foreach ($mw_befehle as $mw_b => $mw_bt) { ?>
-<tr><td><span class="sm-mono">/plugins/<?php echo mw_e($mw_plugin); ?>/mower.php?cmd=<?php echo mw_e($mw_b); ?>&amp;token=<?php echo mw_e($mw_cfg['aktionstoken']); ?></span></td><td><?php echo mw_e($mw_bt); ?></td></tr>
+<tr><td><span class="sm-mono">/plugins/<?php echo mw_e($mw_plugin); ?>/mower.php?cmd=<?php echo mw_e($mw_b); ?><?php echo $mw_bn > 1 ? '&amp;dev=' . (int) $mw_bn : ''; ?>&amp;token=<?php echo mw_e($mw_cfg['aktionstoken']); ?></span></td><td><?php echo mw_e($mw_bt); ?></td></tr>
 <?php } ?>
 </table>
 </div>
+<?php } ?>
+<div class="sm-hilfe"><?php echo mo_t('TEXT.GLEICHWERT_HILFE'); ?></div>
 <div class="sm-warnung"><?php echo mo_t('TEXT.TOKEN_NOETIG'); ?></div>
 </div>
 
@@ -999,14 +1233,20 @@ foreach ($mw_befehle as $mw_b => $mw_bt) { ?>
 <form action="index.php" method="post">
   <?php echo mo_fmt_feld(); ?>
   <input data-role="none" type="hidden" name="activetab" value="tab-loxone">
-  <input data-role="none" type="hidden" name="vorlage" value="1">
-  <button data-role="none" class="sm-btn sm-b-technik" type="submit"><?php echo mw_e(mo_t('TEXT.K_VORLAGE')); ?></button>
-</form>
-<form action="index.php" method="post">
-  <?php echo mo_fmt_feld(); ?>
-  <input data-role="none" type="hidden" name="activetab" value="tab-loxone">
-  <input data-role="none" type="hidden" name="vorlage_vo" value="1">
-  <button data-role="none" class="sm-btn sm-b-technik" type="submit"><?php echo mw_e(mo_t('TEXT.K_VORLAGE_VO')); ?></button>
+  <?php $mw_vml = mo_mowers(); if (count($mw_vml) > 1) { ?>
+  <label style="display:inline-flex;align-items:center;gap:6px;margin-right:10px;">
+      <?php echo mw_e(mo_t('TEXT.VORLAGE_FUER')); ?>
+      <select data-role="none" name="vorlage_dev">
+      <?php foreach ($mw_vml as $mw_vn => $mw_vm) { ?>
+          <option value="<?php echo (int) $mw_vn; ?>"><?php echo (int) $mw_vn; ?>: <?php echo mw_e($mw_vm['name']); ?></option>
+      <?php } ?>
+      </select>
+  </label>
+  <?php } else { ?>
+  <input data-role="none" type="hidden" name="vorlage_dev" value="1">
+  <?php } ?>
+  <button data-role="none" class="sm-btn sm-b-technik" type="submit" name="vorlage" value="1"><?php echo mw_e(mo_t('TEXT.K_VORLAGE')); ?></button>
+  <button data-role="none" class="sm-btn sm-b-technik" type="submit" name="vorlage_vo" value="1"><?php echo mw_e(mo_t('TEXT.K_VORLAGE_VO')); ?></button>
 </form>
 </div>
 
@@ -1059,7 +1299,7 @@ foreach ($mw_befehle as $mw_b => $mw_bt) { ?>
 /* Die Selbstpruefung bekommt die Reiterliste als ARGUMENT, nicht aus einem
  * zweiten preg_match: sie steht zur Laufzeit ohnehin da, und sie ein zweites
  * Mal aus dem Quelltext zu lesen waere eine zweite Wahrheit. */
-foreach (mo_selbsttest(__FILE__, $mw_reiter) as $mw_z) {
+foreach (mo_selbsttest(__FILE__, $mw_reiter, $mw_tab === 'tab-test') as $mw_z) {
     list($mw_schl, $mw_ok, $mw_txt) = $mw_z;
     $mw_zeichen = ($mw_ok === 1) ? '&#10004;' : (($mw_ok === 2) ? '&ndash;' : '&#10008;');
     $mw_farbe = ($mw_ok === 1) ? 'sm-an' : (($mw_ok === 2) ? '' : 'sm-aus');
@@ -1089,6 +1329,9 @@ foreach (mo_selbsttest(__FILE__, $mw_reiter) as $mw_z) {
        * jeder andere Verweis im Reiter das Token traegt. */ ?>
 <a data-role="none" class="sm-btn sm-b-technik" href="/plugins/<?php echo mw_e($mw_plugin); ?>/mower.php?debug=1&amp;refresh=1&amp;token=<?php echo mw_e($mw_cfg['aktionstoken']); ?>" target="_blank"><?php echo mw_e(mo_t('TEXT.DEBUG')); ?></a>
 <a data-role="none" class="sm-btn sm-b-technik" href="/plugins/<?php echo mw_e($mw_plugin); ?>/mower.php?selftest=1&amp;token=<?php echo mw_e($mw_cfg['aktionstoken']); ?>" target="_blank"><?php echo mw_e(mo_t('TEXT.K_SELFTEST')); ?></a>
+<?php /* U8 (Durchgang 01.10.2026, Regeln/04): der Trockenlauf sendet nichts - grau und
+       * hier, nicht orange einen Fingerbreit neben dem echten "Automatik". */ ?>
+<a data-role="none" class="sm-btn sm-b-technik" href="/plugins/<?php echo mw_e($mw_plugin); ?>/mower.php?cmd=auto&amp;probe=1&amp;token=<?php echo mw_e($mw_cfg['aktionstoken']); ?>" target="_blank"><?php echo mw_e(mo_t('TEXT.K_TROCKEN')); ?></a>
 </div>
 
 <?php
@@ -1114,10 +1357,14 @@ foreach (mo_selbsttest(__FILE__, $mw_reiter) as $mw_z) {
 <div class="sm-hilfe"><?php echo mo_t('TEXT.SCHALTEN_HINWEIS'); ?></div>
 <div class="sm-knopfreihe">
 <a data-role="none" class="sm-btn sm-b-aktion" href="/plugins/<?php echo mw_e($mw_plugin); ?>/mower.php?ptest=1&amp;token=<?php echo mw_e($mw_cfg['aktionstoken']); ?>" target="_blank"><?php echo mw_e(mo_t('TEXT.TEST_PUSHNACHRICHT')); ?></a>
-<a data-role="none" class="sm-btn sm-b-aktion" href="/plugins/<?php echo mw_e($mw_plugin); ?>/mower.php?cmd=auto&amp;probe=1&amp;token=<?php echo mw_e($mw_cfg['aktionstoken']); ?>" target="_blank"><?php echo mw_e(mo_t('TEXT.K_TROCKEN')); ?></a>
 <a data-role="none" class="sm-btn sm-b-aktion" href="/plugins/<?php echo mw_e($mw_plugin); ?>/mower.php?cmd=auto&amp;token=<?php echo mw_e($mw_cfg['aktionstoken']); ?>" target="_blank"><?php echo mw_e(mo_t('TEXT.AUTOMATIK')); ?></a>
 <a data-role="none" class="sm-btn sm-b-aktion" href="/plugins/<?php echo mw_e($mw_plugin); ?>/mower.php?cmd=home&amp;token=<?php echo mw_e($mw_cfg['aktionstoken']); ?>" target="_blank"><?php echo mw_e(mo_t('TEXT.NACH_HAUSE')); ?></a>
 <a data-role="none" class="sm-btn sm-b-aktion" href="/plugins/<?php echo mw_e($mw_plugin); ?>/mower.php?cmd=stop&amp;token=<?php echo mw_e($mw_cfg['aktionstoken']); ?>" target="_blank"><?php echo mw_e(mo_t('TEXT.STOPP')); ?></a>
+<form action="index.php" method="post">
+  <?php echo mo_fmt_feld(); ?>
+  <input data-role="none" type="hidden" name="activetab" value="tab-test">
+  <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="tts_test" value="1"><?php echo mw_e(mo_t('TEXT.K_TESTANSAGE')); ?></button>
+</form>
 </div>
 <div class="sm-small"><?php echo mo_t('TEXT.NACH_HAUSE_IST_DER_UNGEFHRLICHSTE_'); ?></div>
 
@@ -1151,7 +1398,14 @@ foreach (mo_selbsttest(__FILE__, $mw_reiter) as $mw_z) {
 <?php if ($mw_loglines) { ?>
 <div class="sm-log"><?php echo mw_e(implode("\n", $mw_loglines)); ?></div>
 <?php } else { ?>
-<div class="sm-alert sm-info"><?php echo mw_e(mo_t('TEXT.NOCH_KEINE_PROTOKOLL_EINTRGE_VORHA')); ?></div>
+<div class="sm-alert sm-info"><?php echo mw_e(mo_t('TEXT.NOCH_KEINE_PROTOKOLL_EINTRGE_VORHA')); ?>
+<?php /* U10 (Durchgang 01.10.2026, Regeln/04): protokolliert wird nur bei Wechseln,
+       * und die Protokollwartung von LoxBerry raeumt die Datei ab - ein leerer
+       * Reiter ist kein Fehler. Der letzte Lauf steht in data/.../lauf.json. */ ?>
+<br><?php echo mw_e($mw_lauf['ts'] > 0
+    ? sprintf(mo_t('TEXT.LOG_LEER_LAUF'), date('d.m.Y H:i:s', (int) $mw_lauf['ts']), (int) $mw_lauf['zaehler'])
+    : mo_t('TEXT.PRUEF_CRON_NIE')); ?>
+<br><?php echo mw_e(mo_t('TEXT.LOG_LEER_WARTUNG')); ?></div>
 <?php } ?>
 <div class="sm-legende">
 <span><i class="sm-punkt sm-b-aktion"></i> <?php echo mw_e(mo_t('LEGENDE.AKTION')); ?></span>
@@ -1176,6 +1430,8 @@ function mwTtsMode() {
     var t = document.getElementById('tts_template_row');
     if (h) { h.style.display = (m === 'audioserver') ? 'block' : 'none'; }
     if (t) { t.style.display = (m === 'ms4h' || m === 'custom') ? 'block' : 'none'; }
+    var a = document.getElementById('tts_alexa_row');
+    if (a) { a.style.display = (m === 'alexang') ? 'block' : 'none'; }
     var port = document.getElementsByName('tts_port')[0];
     /* A23 (05.09.2026): bis 1.1.3 stand hier zusaetzlich port.value === '80'.
        Die Funktion laeuft beim Seitenaufbau; ein bewusst gespeicherter Port 80

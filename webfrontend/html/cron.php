@@ -8,7 +8,8 @@
  * 3. Ereignisse melden: Fehler, Schleifensignal verloren, Maehen beendet,
  *    Messerwechsel faellig, schwacher Akku.
  * 4. Das Lebenszeichen fortschreiben.
- * 5. MQTT bei Aenderung, mindestens halbstuendlich, danach das Lebenszeichen.
+ * 5. MQTT bei Aenderung (nur die geaenderten Themen), halbstuendlich der volle
+ *    Satz, danach das Lebenszeichen; ausgetragene Maeher bekommen einmal '-'.
  *
  * Die Reihenfolge 4 vor 5 ist seit 1.1.6 wichtig (A6): mo_mqtt_publish()
  * las lauf.json, bevor mo_lauf_vermerken() es geschrieben hatte.
@@ -148,6 +149,10 @@ if ($mo_fehlten) {
     }
 }
 
+/* M7 (Durchgang 01.10.2026): die Abodatei des Gateways folgt dem Praefix -
+ * geschrieben wird nur, wenn sie abweicht (mo_abo_datei()). */
+mo_abo_datei(isset($mo_cfg['mqtt_topic']) ? $mo_cfg['mqtt_topic'] : '', true);
+
 mo_events_check();
 
 /* Hat dieser Lauf wirklich GEMESSEN? Ein Lauf, bei dem alle Maeher
@@ -210,14 +215,21 @@ foreach ($mo_stand as $n => $st) {
      * wechselte der Text, ohne dass etwas gesendet wurde. Die Quelle
      * steht jetzt an EINER Stelle in der Bibliothek, und der Text geht
      * auf seine Klasse zurueckgefuehrt mit ein. */
+    /* M6 (Durchgang 01.10.2026, Entscheidung Nr. 26): bei einer Aenderung
+     * gehen nur die geaenderten Themen hinaus, der volle Satz alle 30 min
+     * (und nach Neustart, Praefix- oder Schalterwechsel - dann fehlen die
+     * Merker). M3: Signatur und Merker werden NUR geschrieben, wenn wirklich
+     * gesendet wurde - bis 1.1.14 auch bei MQTT aus, und nach dem
+     * Einschalten stand bis zu 30 min der alte Zustand im Broker. */
     $sig = mo_mqtt_signatur($n, $st);
     $sigf = mo_tmpdir() . '/mqtt_sig_' . $n . '.txt';
     $beat = mo_tmpdir() . '/mqtt_beat_' . $n;
     $old = is_file($sigf) ? (string) file_get_contents($sigf) : '';
-    if ($sig !== $old || !is_file($beat) || time() - filemtime($beat) > 1800) {
-        mo_mqtt_publish($st, $n);
+    $mo_voll = !is_file($beat) || time() - filemtime($beat) > 1800;
+    $mo_art = $mo_voll ? 'voll' : ($sig !== $old ? 'aenderung' : '');
+    if ($mo_art !== '' && mo_mqtt_publish($st, $n, $mo_art)) {
         @file_put_contents($sigf, $sig);
-        @touch($beat);
+        if ($mo_voll) { @touch($beat); }
     }
 }
 
@@ -226,7 +238,11 @@ foreach ($mo_stand as $n => $st) {
  * gibt es kein Alter - nur einen Zeitstempel, der frisch sein muss. Der
  * Doppelt-senden-Filter oben wird dafuer uebergangen. Seit 1.1.6 gehen
  * hier auch <praefix>/ts und <praefix>/zaehler je Maeher mit (A6). */
-mo_mqtt_lebenszeichen();
+mo_mqtt_lebenszeichen($mo_stand);
+
+/* M4 (Durchgang 01.10.2026): ist die Zahl der Maeher gesunken, bekommen die
+ * weggefallenen einmal '-' auf ihre Zustandsthemen (mo_mqtt_ausgetragen()). */
+mo_mqtt_ausgetragen();
 
 echo 'OK;GEMESSEN=' . $mo_gemessen . ';MAEHER=' . $mo_anzahl
    . ';ZAEHLER=' . (int) $mo_lauf['zaehler'] . "\n";

@@ -153,6 +153,16 @@ mo_zweitschrift_holen() {
 # Aktualisierung (plugininstall.pl:845).
 AKT=0
 [ -f "$WORK/.aktualisierung" ] && AKT=1
+# I1 (Durchgang 01.10.2026, Entscheidung 1/8): zurueckgespielt wird nur bei
+# einer Aktualisierung (Merker von preupgrade.sh) oder bei liegender Marke
+# (vergessene Marke gilt ohne Altersgrenze, Nr. 8). Bei einer Neuinstallation
+# hat preinstall.sh eine liegengebliebene Zweitschrift schon nach .alt gelegt;
+# diese Bedingung haelt postinstall.sh auch dann davon ab, wenn ein Werkzeug
+# sie wieder hingelegt hat. Bis 1.1.14 lief mo_zweitschrift_holen auch bei
+# AKT=0 (Installer-Pruefer Fall D: "<OK> Konfiguration aus Sicherung
+# wiederhergestellt" mit Kennwort einer frueheren Anlage).
+MARKE_DA=0
+[ -e "$MARKE" ] && MARKE_DA=1
 
 # Nachlese 25.09.2026: eine Neuinstallation braucht keine Upgrade-Marke. Liegt
 # eine, stammt sie aus einem abgebrochenen Update und setzte den Minutentakt
@@ -163,7 +173,9 @@ if [ "$AKT" = "0" ] && [ -e "$MARKE" ]; then
 fi
 
 MO_GEHOLT=0; MO_WARN=0
-mo_zweitschrift_holen
+if [ "$AKT" = "1" ] || [ "$MARKE_DA" = "1" ]; then
+    mo_zweitschrift_holen
+fi
 if [ "$MO_GEHOLT" = "1" ] && [ "$AKT" = "0" ]; then
     echo "<OK> Konfiguration aus Sicherung wiederhergestellt."
 fi

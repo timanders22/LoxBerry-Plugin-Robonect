@@ -39,6 +39,15 @@
  *   ?cmd=auto | man | home | eod | start | stop &token=T
  *   ?cmd=blade_reset&token=T   Messerwechsel quittieren (Nullpunkt neu setzen)
  *   ?cmd=...&probe=1&token=T   TROCKENLAUF: sagt, was gesendet WUERDE
+ *   Antwort CMD;OK=1|0|2;BEFEHL=..[;UNVERAENDERT=1;SEIT_S=n][;GRUND=..];INFO=..
+ *     UNVERAENDERT=1: derselbe MODUS (auto/man/home/eod/job) ging vor weniger
+ *       als 60 s hinaus und wurde nicht erneut gesendet (Durchgang 01.10.2026,
+ *       X-7, Entscheidungen Nr. 19/28); start und stop sind Auftraege und
+ *       gehen immer hinaus.
+ *     GRUND bei OK=0: anmeldung (Kennwort), abgewiesen (HTTP-Fehler des
+ *       Moduls), modul (das Modul lehnt ab, INFO nennt seine Meldung),
+ *       kein_json, keine_antwort (Ausgang unbekannt - der Befehl kann
+ *       trotzdem gewirkt haben), nicht_konfiguriert, bremse_merker (HTTP 503).
  *   Ohne passendes Token aus dem Reiter "Einbindung in Loxone" antwortet
  *   ?cmd= mit HTTP 403.
  *
@@ -298,19 +307,34 @@ if (isset($_GET['cmd'])) {
             echo "CMD;OK=2;BEFEHL=blade_reset;PROBE=1;INFO=wuerde den Nullpunkt neu setzen\n";
             exit;
         }
-        $ok = mo_blade_reset($dev);
-        /* A3/A16: schlaegt es fehl, ist der Maeher nicht erreichbar - der
-         * Nullpunkt bleibt dann ausdruecklich stehen. Der Grund gehoert in
-         * die Antwort, sonst sucht der Anwender einen Schreibfehler. */
+        $mo_bgrund = '';
+        $mo_btext = '';
+        $ok = mo_blade_reset($dev, $mo_bgrund, $mo_btext);
+        /* A3/A16: schlaegt es fehl, bleibt der Nullpunkt ausdruecklich
+         * stehen. C5 (Durchgang 01.10.2026): die Antwort nennt, WELCHER
+         * Schritt scheiterte - bis 1.1.14 hiess es immer "Maeher antwortet
+         * nicht", auch bei einem nicht eingerichteten Maeher oder einem
+         * Schreibfehler. */
         if ($ok === 0) {
-            http_response_code(502);
-            echo "CMD;OK=0;BEFEHL=blade_reset;INFO=Maeher antwortet nicht - Nullpunkt unveraendert\n";
+            if ($mo_bgrund === 'nicht_eingerichtet') {
+                http_response_code(409);
+                echo "CMD;OK=0;BEFEHL=blade_reset;GRUND=nicht_konfiguriert;INFO=Maeher nicht eingerichtet - Nullpunkt unveraendert\n";
+            } elseif ($mo_bgrund === 'schreibfehler') {
+                http_response_code(500);
+                echo "CMD;OK=0;BEFEHL=blade_reset;GRUND=schreibfehler;INFO=Die Konfiguration liess sich nicht schreiben - Nullpunkt unveraendert\n";
+            } else {
+                http_response_code(502);
+                echo 'CMD;OK=0;BEFEHL=blade_reset;GRUND=nicht_erreichbar;INFO=Maeher antwortet nicht ('
+                   . str_replace(';', ',', mo_mqtt_wert_saeubern($mo_btext)) . ') - Nullpunkt unveraendert' . "\n";
+            }
             exit;
         }
         echo 'CMD;OK=' . $ok . ";BEFEHL=blade_reset\n";
         exit;
     }
-    list($ok, $info, $art) = mo_command($cmd, $dev, isset($_GET['p']) && is_string($_GET['p']) ? $_GET['p'] : '', $probe);
+    $mo_r = mo_command($cmd, $dev, isset($_GET['p']) && is_string($_GET['p']) ? $_GET['p'] : '', $probe);
+    list($ok, $info, $art) = $mo_r;
+    $mo_zusatz = (isset($mo_r[3]) && is_array($mo_r[3])) ? $mo_r[3] : array();
     /* A16: bis 1.1.3 ging in diesem Zweig alles mit HTTP 200 hinaus - der
      * unbekannte Befehl, der nicht eingerichtete Maeher und der
      * fehlgeschlagene Geraetekontakt. Der ?roh=-Zweig nebenan setzte laengst
@@ -331,12 +355,25 @@ if (isset($_GET['cmd'])) {
             http_response_code(400);
         } elseif ($art === 'anlage') {
             http_response_code(409);
+        } elseif ($art === 'merker') {
+            // C2: die Gleichwert-Sperre faellt geschlossen aus - nichts gesendet.
+            http_response_code(503);
         } else {
             http_response_code(502);
         }
     }
+    /* C2/C4 (Durchgang 01.10.2026): UNVERAENDERT/SEIT_S und GRUND stehen vor
+     * INFO; INFO bleibt das letzte Feld, ein Semikolon darin wird zum Komma
+     * (die Meldung des Moduls ist fremder Text). */
+    $mo_felder = '';
+    foreach ($mo_zusatz as $mo_k => $mo_v) {
+        if (preg_match('/^[A-Z_]{1,20}$/', (string) $mo_k) === 1) {
+            $mo_felder .= ';' . $mo_k . '=' . preg_replace('/[^A-Za-z0-9_\-]/', '', (string) $mo_v);
+        }
+    }
     echo 'CMD;OK=' . $ok . ';BEFEHL=' . preg_replace('/[^A-Za-z0-9_\-]/', '', $cmd)
-       . ($probe ? ';PROBE=1' : '') . ';INFO=' . mo_mqtt_wert_saeubern($info) . "\n";
+       . ($probe ? ';PROBE=1' : '') . $mo_felder
+       . ';INFO=' . str_replace(';', ',', mo_mqtt_wert_saeubern($info)) . "\n";
     exit;
 }
 
@@ -364,7 +401,9 @@ if (isset($_GET['ptest'])) {
      * Minute spaeter wirkt, sieht aus wie ein Test, der nicht wirkt.
      * Ueber alle Maeher, weil der Merker fuer alle gilt. */
     foreach (array_keys(mo_mowers()) as $mo_n) {
-        mo_mqtt_publish(null, $mo_n);
+        /* M6 (Durchgang 01.10.2026): Aenderungsversand - hinaus geht das
+         * geaenderte ptest, nicht der volle Satz je Maeher. */
+        mo_mqtt_publish(null, $mo_n, 'aenderung');
     }
     echo "PTEST;OK=1;DAUER=300\n";
     exit;

@@ -19,7 +19,12 @@
 #      Die Marke aus preupgrade.sh, neben dem Datenordner. Bliebe sie nach
 #      einem abgebrochenen Update liegen, setzte sie bei einer
 #      Neuinstallation in derselben Stunde den Minutentakt aus.
-#   4. die retained MQTT-Themen der Linie im Broker (Nachlese 25.09.2026)
+#   4. die retained MQTT-Themen der Linie im Broker (Nachlese 25.09.2026),
+#      seit dem Durchgang 01.10.2026 auch unter vorgemerkten frueheren Praefixen
+#   5. config/plugins/<ordner>.backup.json.alt und <ordner>.mqtt_stand.json(.alt)
+#      (Durchgang 01.10.2026): die Zweitschrift, die preinstall.sh bei einer
+#      Neuinstallation beiseitelegt, und der MQTT-Stand (vorgemerkte Praefixe,
+#      Zahl der gemeldeten Maeher).
 
 PDIR=$3
 [ -n "$PDIR" ] || PDIR="robonect"
@@ -115,6 +120,21 @@ if [ -f "$BK" ]; then
 else
     echo "<INFO> Keine Sicherung ausserhalb des Plugin-Ordners vorhanden."
 fi
+# I2 (Durchgang 01.10.2026): die beiseitegelegte Zweitschrift traegt dasselbe
+# wie die Zweitschrift - ueberschreiben, dann entfernen. Der MQTT-Stand traegt
+# keine Zugangsdaten; er wird erst hier entfernt, weil das MQTT-Leeren oben die
+# vorgemerkten Praefixe daraus liest.
+if [ -f "$BK.alt" ]; then
+    dd if=/dev/zero of="$BK.alt" bs=1 count="$(wc -c < "$BK.alt" 2>/dev/null || echo 0)" \
+       conv=notrunc >/dev/null 2>&1
+    rm -f "$BK.alt" && echo "<OK> Beiseitegelegte Zweitschrift entfernt: $PDIR.backup.json.alt"
+fi
+STAND="$BASE/config/plugins/$PDIR.mqtt_stand.json"
+for F in "$STAND" "$STAND.alt"; do
+    if [ -e "$F" ]; then
+        rm -f "$F" && echo "<OK> MQTT-Stand entfernt: $(basename "$F")"
+    fi
+done
 
 # ------------------------------------------------------------------
 # A16 (06.09.2026, gemessen): erst nachzaehlen, dann Entwarnung geben.
@@ -127,7 +147,7 @@ fi
 # dem Augenblick, in dem sie ausgegeben wurde - und geprueft hat sie
 # niemand.
 UEBRIG=""
-for F in "$BK" "$CF" "$CF.kaputt"; do
+for F in "$BK" "$BK.alt" "$STAND" "$STAND.alt" "$CF" "$CF.kaputt"; do
     [ -e "$F" ] && UEBRIG="$UEBRIG $(basename "$F")"
 done
 if [ -z "$UEBRIG" ]; then
