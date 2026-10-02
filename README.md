@@ -576,6 +576,23 @@ dabei; wer sie nirgends verdrahtet hatte, merkt nichts.
 HTTP 403 mit `SELFTEST;OK=0;ERR=TOKEN`. Es wird dabei nichts geschaltet und
 nichts angefahren. Hausstandard fuer alle Aktionsendpunkte.
 
+## Was 1.1.16 behebt
+
+Baustein-Liste zum Nachbauen (Nachzug B: X-8, Hausregel A4).
+Gemessen mit der gerenderten Oberfläche unter PHP 7.4 und 8.5 gegen die mitgelieferten Vorlagen; nicht am Gerät.
+
+* **Baustein-Liste zum Nachbauen:** Schritt 6 im Reiter „Einbindung in Loxone“ ist jetzt EINE nummerierte Liste
+  (# | Baustein | Name | Parameter | Eingänge verbinden mit) mit 28 Zeilen statt drei Teiltabellen mit Sammelzeilen
+  („S1 / S2“, „U1 + ODER O1“, „S4 + Taster“). Neu vorne: der virtuelle HTTP-Eingang und der virtuelle Ausgang samt
+  allen 22 bzw. 7 Befehlen – Titel, Adressen und Befehle so, wie die beiden Vorlagen-Knöpfe sie erzeugen (aus denselben
+  Funktionen gelesen; mit eingeschalteter Einsatzstatistik erscheinen die vier zusätzlichen Werte von selbst).
+* **Ausdrücklich ausgeschrieben, was vorher nur angedeutet war:** die Ausfallerkennung als Formel
+  `I1 + 1230768000 - I2` (Loxone-Zeit, MOWER_TS) mit Schwellwertschalter 300 s; „CODE = 2“ als Wert MOWER_MAEHT;
+  die Freigabe nach dem Regen als Einschaltverzögerung auf „Automatik“; beide Sperren (Regen, Ruhezeit) über ein
+  ODER auf „Zur Ladestation“ – ein Befehl des virtuellen Ausgangs bekommt nur eine Quelle.
+* **In Loxone:** nichts zwingend zu tun. Wer Regen- und Ruhezeitsperre beide direkt an „Zur Ladestation“ gelegt hat,
+  führt sie nach der neuen Liste über ein ODER zusammen.
+
 ## Was 1.1.15 behebt
 
 Ansage-3: Ausgabe über Google-Lautsprecher. Gemessen an einer Attrappe und am echten Endpunkt aus Chromecast 4 Lox NG 1.3.16 (Dienst-Attrappe) unter PHP 7.4 und 8.5; die Ausgabe über Alexa NG und alle übrigen Ausgabearten messen vorher = nachher gleich. Nicht am Gerät, nicht an echten Lautsprechern.

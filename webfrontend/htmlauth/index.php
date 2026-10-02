@@ -1302,37 +1302,111 @@ foreach ($mw_befehle as $mw_b => $mw_bt) { ?>
 </div>
 
 <div class="sm-step"><b><?php echo mw_e(mo_t('TEXT.SCHRITT_6_BAUSTEINE')); ?></b><br>
-<b><?php echo mw_e(mo_t('TEXT.4A_KACHELN')); ?></b>
+<?php /* X-8 (02.10.2026, Entscheidung 36): Komplette Baustein-Liste in EINER
+         nummerierten Tabelle, eine Zeile je Baustein. Typ, Name, Parameter und
+         Verbindung stehen in [BAUSTEIN] der Sprachdateien. Vorlagen-Titel,
+         Adressen und Befehlstitel kommen aus DENSELBEN Funktionen wie die
+         Importvorlagen: mo_vorlage(1) und mo_vo_vorlage(1) werden gerufen und
+         ihre XML gelesen, nicht abgeschrieben.
+         Platzhalter: {Bn} -> "#n", {F:FELD} -> Titel des Eingangsbefehls zum
+         Feld, {A:befehl} -> Titel des Ausgangsbefehls zu ?cmd=befehl.
+         Zeile: array(Kennung, Typ, Name, Parameter, Argumente, Verbindung);
+         ein Name als array(wert) steht woertlich da (Wert aus dem Code). */
+$mw_bs_lesen = function ($xml) {
+    $w = function ($el, $attr) {
+        return preg_match('/\s' . $attr . '="([^"]*)"/', $el, $m)
+            ? html_entity_decode($m[1], ENT_QUOTES | ENT_XML1, 'UTF-8') : '';
+    };
+    $aus = array('titel' => '', 'adresse' => '', 'zyklus' => '', 'befehle' => array());
+    if (preg_match('/<(?:VirtualInHttp|VirtualOut)\s[^>]*>/', $xml, $m)) {
+        $aus['titel'] = $w($m[0], 'Title');
+        $aus['adresse'] = $w($m[0], 'Address');
+        $aus['zyklus'] = $w($m[0], 'PollingTime');
+    }
+    preg_match_all('/<(?:VirtualInHttpCmd|VirtualOutCmd)\s[^>]*>/', $xml, $mm);
+    foreach ($mm[0] as $el) {
+        $aus['befehle'][] = array('titel' => $w($el, 'Title'), 'check' => $w($el, 'Check'), 'ein' => $w($el, 'CmdOn'));
+    }
+    return $aus;
+};
+$mw_bs_xml = mo_vorlage(1);
+$mw_bs_vi = $mw_bs_lesen($mw_bs_xml[1]);
+$mw_bs_xml = mo_vo_vorlage(1);
+$mw_bs_vo = $mw_bs_lesen($mw_bs_xml[1]);
+$mw_bs_titel = array();
+$mw_bs_check = array();
+foreach ($mw_bs_vi['befehle'] as $mw_bs_b) {
+    if (preg_match('/;([A-Z0-9_]+)=/', $mw_bs_b['check'], $mw_bs_m)) {
+        $mw_bs_titel['F:' . $mw_bs_m[1]] = $mw_bs_b['titel'];
+        $mw_bs_check[$mw_bs_m[1]] = $mw_bs_b['check'];
+    }
+}
+foreach ($mw_bs_vo['befehle'] as $mw_bs_b) {
+    if (preg_match('/[?&]cmd=([^&]+)/', $mw_bs_b['ein'], $mw_bs_m)) {
+        $mw_bs_titel['A:' . rawurldecode($mw_bs_m[1])] = $mw_bs_b['titel'];
+    }
+}
+$mw_bs_mono = function ($s) { return '<span class="sm-mono">' . mw_e($s) . '</span>'; };
+$mw_bs_namen = function ($befehle) use ($mw_bs_mono) {
+    $t = array();
+    foreach ($befehle as $b) { $t[] = $mw_bs_mono($b['titel']); }
+    return implode(', ', $t);
+};
+$mw_bs_a = function ($cmd) use ($mw_bs_titel) {
+    return isset($mw_bs_titel['A:' . $cmd]) ? $mw_bs_titel['A:' . $cmd] : '{A:' . $cmd . '}';
+};
+$mw_bs = array(
+    array('B1', 'T_VI', array($mw_bs_vi['titel']), 'P_VI', array($mw_bs_mono($mw_bs_vi['adresse']), mw_e($mw_bs_vi['zyklus']), mw_e(mo_t('TEXT.K_VORLAGE'))), 'V_KEINE'),
+    array('B2', 'T_VI_BEFEHL', 'N_VORLAGE', 'P_VI_BEFEHL', array(count($mw_bs_vi['befehle']), $mw_bs_namen($mw_bs_vi['befehle']), $mw_bs_mono(isset($mw_bs_check['CODE']) ? $mw_bs_check['CODE'] : '')), 'V_UNTER_B1'),
+    array('B3', 'T_VO', array($mw_bs_vo['titel']), 'P_VO', array($mw_bs_mono($mw_bs_vo['adresse']), mw_e(mo_t('TEXT.K_VORLAGE_VO'))), 'V_KEINE'),
+    array('B4', 'T_VO_BEFEHL', 'N_VORLAGE', 'P_VO_BEFEHL', array(count($mw_bs_vo['befehle']), $mw_bs_namen($mw_bs_vo['befehle'])), 'V_UNTER_B3'),
+    array('B5', 'T_STATUS', 'B5_NAME', 'B5_PARAM', array(), 'B5_VERB'),
+    array('B6', 'T_ANALOG', 'B6_NAME', 'B6_PARAM', array(), 'B6_VERB'),
+    array('B7', 'T_ANALOG', 'B7_NAME', 'P_EINHEIT_H', array(), 'B7_VERB'),
+    array('B8', 'T_ANALOG', 'B8_NAME', 'P_EINHEIT_H', array(), 'B8_VERB'),
+    array('B9', 'T_SCHWELL', 'B9_NAME', 'P_EIN_AUS', array(), 'B9_VERB'),
+    array('B10', 'T_SCHWELL', 'B10_NAME', 'P_EIN_AUS', array(), 'B10_VERB'),
+    array('B11', 'T_UND', 'B11_NAME', 'P_KEINE', array(), 'B11_VERB'),
+    array('B12', 'T_ODER', 'B12_NAME', 'B12_PARAM', array(), 'B12_VERB'),
+    array('B13', 'T_BENACH', 'B13_NAME', 'B13_PARAM', array(), 'B13_VERB'),
+    array('B14', 'T_SCHWELL', 'B14_NAME', 'B14_PARAM', array(), 'B14_VERB'),
+    array('B15', 'T_SCHWELL', 'B15_NAME', 'P_EIN_AUS', array(), 'B15_VERB'),
+    array('B16', 'T_BENACH', 'B16_NAME', 'B16_PARAM', array(), 'B16_VERB'),
+    array('B17', 'T_FORMEL', 'B17_NAME', 'B17_PARAM', array(), 'B17_VERB'),
+    array('B18', 'T_SCHWELL', 'B18_NAME', 'B18_PARAM', array(), 'B18_VERB'),
+    array('B19', 'T_UND', 'B19_NAME', 'P_KEINE', array(), 'B19_VERB'),
+    array('B20', 'T_EINVERZ', 'B20_NAME', 'B20_PARAM', array(), 'B20_VERB'),
+    array('B21', 'T_ODER_OPT', 'B21_NAME', 'P_KEINE', array(), 'B21_VERB'),
+    array('B22', 'T_UND', 'B22_NAME', 'P_KEINE', array(), 'B22_VERB'),
+    array('B23', 'T_ODER', 'B23_NAME', 'B23_PARAM', array(), 'B23_VERB'),
+    array('B24', 'T_SCHWELL', 'B24_NAME', 'B24_PARAM', array(), 'B24_VERB'),
+    array('B25', 'T_TASTER', 'B25_NAME', 'B25_PARAM', array(), 'V_KEINE'),
+    array('B26', 'T_VO_EIN', array($mw_bs_a('home')), 'P_VO_EIN', array($mw_bs_mono('?cmd=home')), 'B26_VERB'),
+    array('B27', 'T_VO_EIN', array($mw_bs_a('auto')), 'P_VO_EIN', array($mw_bs_mono('?cmd=auto')), 'B27_VERB'),
+    array('B28', 'T_VO_EIN', array($mw_bs_a('blade_reset')), 'P_VO_EIN', array($mw_bs_mono('?cmd=blade_reset')), 'B28_VERB'),
+);
+$mw_bs_nr = array();
+foreach ($mw_bs as $mw_bs_i => $mw_bs_z) { $mw_bs_nr[$mw_bs_z[0]] = $mw_bs_i + 1; }
+/* Erst vsprintf auf den Sprachtext, dann die Platzhalter: die eingesetzten
+ * Titel und Adressen kommen so nie durch vsprintf. */
+$mw_bs_t = function ($schluessel, $argumente = array()) use ($mw_bs_nr, $mw_bs_titel, $mw_bs_mono) {
+    $s = (string) mo_t('BAUSTEIN.' . $schluessel);
+    if ($argumente) { $s = vsprintf($s, $argumente); }
+    return preg_replace_callback('/\{(B\d+|[FA]:[A-Za-z0-9_]+)\}/', function ($m) use ($mw_bs_nr, $mw_bs_titel, $mw_bs_mono) {
+        if (isset($mw_bs_nr[$m[1]])) { return '#' . $mw_bs_nr[$m[1]]; }
+        return isset($mw_bs_titel[$m[1]]) ? $mw_bs_mono($mw_bs_titel[$m[1]]) : $m[0];
+    }, $s);
+}; ?>
+<?php echo $mw_bs_t('TEXT'); ?>
 <div class="sm-breit">
 <table class="sm-tbl">
-<tr><th>#</th><th><?php echo mw_e(mo_t('TEXT.BAUSTEIN')); ?></th><th><?php echo mw_e(mo_t('TEXT.NAME')); ?></th><th><?php echo mw_e(mo_t('TEXT.EINSTELLUNG')); ?></th><th><?php echo mw_e(mo_t('TEXT.EINGNGE')); ?></th></tr>
-<tr><td>1</td><td><?php echo mw_e(mo_t('TEXT.STATUSBAUSTEIN')); ?></td><td><?php echo mw_e(mo_t('TEXT.MHER_ZUSTAND')); ?></td><td><?php echo mw_e(mo_t('TEXT.TEXTE_JE_WERT_1_PARKT_2_MHT_3_FHRT')); ?></td><td><?php echo mw_e(mo_t('TEXT.I1_CODE')); ?></td></tr>
-<tr><td>2</td><td><?php echo mw_e(mo_t('TEXT.ANALOGANZEIGEN')); ?></td><td><?php echo mw_e(mo_t('TEXT.AKKU_BETRIEBSSTUNDEN_MESSER_RESTST')); ?></td><td><?php echo mo_t('TEXT.EINHEITEN'); ?> <span class="sm-mono">&lt;v.0&gt; %</span>, <span class="sm-mono">&lt;v.0&gt; h</span></td><td><?php echo mw_e(mo_t('TEXT.BATT_STUNDEN_MESSER')); ?></td></tr>
+<tr><th>#</th><th><?php echo mw_e(mo_t('BAUSTEIN.T_TYP')); ?></th><th><?php echo mw_e(mo_t('BAUSTEIN.T_NAME')); ?></th><th><?php echo mw_e(mo_t('BAUSTEIN.T_PARAM')); ?></th><th><?php echo mw_e(mo_t('BAUSTEIN.T_VERB')); ?></th></tr>
+<?php foreach ($mw_bs as $mw_bs_i => $mw_bs_z) { ?>
+<tr><td><?php echo $mw_bs_i + 1; ?></td><td><?php echo $mw_bs_t($mw_bs_z[1]); ?></td><td><span class="sm-mono"><?php echo is_array($mw_bs_z[2]) ? mw_e($mw_bs_z[2][0]) : $mw_bs_t($mw_bs_z[2]); ?></span></td><td><?php echo $mw_bs_t($mw_bs_z[3], $mw_bs_z[4]); ?></td><td><?php echo $mw_bs_t($mw_bs_z[5]); ?></td></tr>
+<?php } ?>
 </table>
 </div>
-<b><?php echo mw_e(mo_t('TEXT.4B_MELDUNGEN')); ?></b>
-<div class="sm-breit">
-<table class="sm-tbl">
-<tr><th>#</th><th><?php echo mw_e(mo_t('TEXT.BAUSTEIN')); ?></th><th><?php echo mw_e(mo_t('TEXT.NAME')); ?></th><th><?php echo mw_e(mo_t('TEXT.EINSTELLUNG')); ?></th><th><?php echo mw_e(mo_t('TEXT.EINGNGE')); ?></th></tr>
-<tr><td>3</td><td><?php echo mw_e(mo_t('TEXT.SCHWELLWERTSCHALTER_S1_S2')); ?></td><td><?php echo mw_e(mo_t('TEXT.MELDEFENSTER_PUSH_FREIGEGEBEN')); ?></td><td><?php echo mw_e(mo_t('TEXT.JE_EIN_0_5_AUS_0_4')); ?></td><td><?php echo mw_e(mo_t('TEXT.ANN_BZW_PUSH')); ?></td></tr>
-<tr><td>4</td><td><?php echo mw_e(mo_t('TEXT.UND_U1_ODER_O1')); ?></td><td><?php echo mw_e(mo_t('TEXT.MHER_MELDUNG')); ?></td><td><?php echo mw_e(mo_t('TEXT.O1_IST_DIE_EINZIGE_QUELLE_DES_BENA')); ?></td><td><?php echo mw_e(mo_t('TEXT.U1_S1_S2')); ?></td></tr>
-<tr><td>5</td><td><?php echo mw_e(mo_t('TEXT.BENACHRICHTIGUNGS_BAUSTEIN')); ?></td><td><?php echo mw_e(mo_t('TEXT.PUSH_RASENMHER')); ?></td><td><?php echo mw_e(mo_t('TEXT.TEXT_Z_B_MELDUNG_VOM_RASENMHER_DET')); ?></td><td><?php echo mw_e(mo_t('TEXT.O1')); ?></td></tr>
-<tr><td>6</td><td><?php echo mw_e(mo_t('TEXT.SCHWELLWERTSCHALTER_S3')); ?></td><td><?php echo mw_e(mo_t('TEXT.STRUNG')); ?></td><td><?php echo mw_e(mo_t('TEXT.EIN_0_5_AN_FEHLER_EIGENE_WARNKACHE')); ?></td><td><?php echo mw_e(mo_t('TEXT.FEHLER_3')); ?></td></tr>
-<tr><td>7</td><td><?php echo mw_e(mo_t('TEXT.BENACHRICHTIGUNGS_BAUSTEIN_2')); ?></td><td><?php echo mw_e(mo_t('TEXT.TEST_PUSH')); ?></td><td><?php echo mw_e(mo_t('TEXT.EIGENER_BAUSTEIN_NUR_FR_DEN_TEST')); ?></td><td><?php echo mw_e(mo_t('TEXT.SCHWELLWERTSCHALTER_AN_PTEST')); ?></td></tr>
-<tr><td>8</td><td><?php echo mw_e(mo_t('TEXT.STATUSBAUSTEIN')); ?></td><td><?php echo mw_e(mo_t('TEXT.B8_NAME')); ?></td><td><?php echo mw_e(mo_t('TEXT.B8_EINST')); ?></td><td><?php echo mw_e(mo_t('TEXT.B8_EING')); ?></td></tr>
-</table>
-</div>
-<b><?php echo mw_e(mo_t('TEXT.4C_WETTER_UND_ZEITSPERREN_DER_EIGE')); ?></b>
-<div class="sm-breit">
-<table class="sm-tbl">
-<tr><th>#</th><th><?php echo mw_e(mo_t('TEXT.BAUSTEIN')); ?></th><th><?php echo mw_e(mo_t('TEXT.NAME')); ?></th><th><?php echo mw_e(mo_t('TEXT.EINSTELLUNG')); ?></th><th><?php echo mw_e(mo_t('TEXT.EINGNGE')); ?></th></tr>
-<tr><td>9</td><td><?php echo mw_e(mo_t('TEXT.UND_U2')); ?></td><td><?php echo mw_e(mo_t('TEXT.MHEN_SPERREN_BEI_REGEN')); ?></td><td><?php echo mo_t('TEXT.AUF'); ?> <span class="sm-mono">?cmd=home</span><?php echo mo_t('TEXT.FREIGABE_ERST_NACH_DER_TROCKNUNGSZ'); ?> <span class="sm-mono">?cmd=auto</span></td><td><?php echo mo_t('TEXT.REGENSENSOR_CODE_2'); ?></td></tr>
-<tr><td>10</td><td><?php echo mw_e(mo_t('TEXT.UND_U3')); ?></td><td><?php echo mw_e(mo_t('TEXT.RUHEZEITEN_EINHALTEN')); ?></td><td><?php echo mo_t('TEXT.TEXT_2'); ?> <span class="sm-mono">?cmd=home</span> <?php echo mw_e(mo_t('TEXT.ZU_ZEITEN_IN_DENEN_NICHT_GEMHT_WER')); ?></td><td><?php echo mo_t('TEXT.ZEITSCHALTUHR_GGF_SCHULFREI_FEIERT'); ?></td></tr>
-<tr><td>11</td><td><?php echo mw_e(mo_t('TEXT.SCHWELLWERTSCHALTER_S4_TASTER')); ?></td><td><?php echo mw_e(mo_t('TEXT.MESSERWECHSEL_QUITTIEREN')); ?></td><td><?php echo mo_t('TEXT.TASTER_IN_DER_APP_VIRTUELLER_AUSGA'); ?> <span class="sm-mono">?cmd=blade_reset</span></td><td><?php echo mw_e(mo_t('TEXT.MESSERWARN_FR_DIE_WARNKACHEL')); ?></td></tr>
-</table>
-</div>
-<div class="sm-hilfe"><b><?php echo mw_e(mo_t('TEXT.PRAXIS_ERFAHRUNG')); ?></b> <?php echo mo_t('TEXT.DER_BENACHRICHTIGUNGS_BAUSTEIN_SEN'); ?></div>
-<div class="sm-hilfe"><b><?php echo mw_e(mo_t('TEXT.ZU_8')); ?></b> <?php echo mo_t('TEXT.ZU_8_TEXT'); ?></div>
+<div class="sm-hilfe"><?php echo $mw_bs_t('ERLAEUTERUNG', array((int) mo_polling())); ?></div>
 </div>
 
 <div class="sm-step"><b><?php echo mw_e(mo_t('TEXT.SCHRITT_7_GEGENPROBE')); ?></b><br>
