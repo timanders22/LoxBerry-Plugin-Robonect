@@ -19,6 +19,12 @@ error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE);
 date_default_timezone_set('Europe/Berlin');
 
 
+/* Gemeinsame Sprachausgabe (Abschrift von Werkzeuge/gemeinsam/sprachausgabe.php,
+ * Nr. 36 b, Stufe 1). Liegt neben dieser Datei; sie legt beim Einbinden nur
+ * Funktionen an und schuetzt sich selbst gegen doppeltes Laden. */
+require_once __DIR__ . '/sprachausgabe.php';
+
+
 /* Den LoxBerry-Wurzelordner ohne festen Systempfad bestimmen.
  *
  * Vom eigenen Ablageort aufwaerts, bis ein Verzeichnis gefunden ist, das
@@ -2919,12 +2925,20 @@ function mo_zusatzwerte($dev = 1)
 /** Der Webport dieses LoxBerry aus der general.json (Webserver.Port), sonst 80. */
 function mo_webport()
 {
+    /* Nr. 36 b, Stufe 1: gemeinsame Sprachausgabe. Liest Webserver.Port und
+     * WEBSERVER.Port (bisher nur die erste Schreibweise), 1 bis 65535, sonst 80. */
     $p = mo_paths();
-    if ($p['lbhome'] === '') { return 80; }
-    $g = json_decode((string) @file_get_contents($p['lbhome'] . '/config/system/general.json'), true);
-    $port = (is_array($g) && isset($g['Webserver']['Port']) && is_scalar($g['Webserver']['Port']))
-        ? (int) $g['Webserver']['Port'] : 0;
-    return ($port > 0 && $port <= 65535) ? $port : 80;
+    return ansage_webport($p['lbhome'] !== '' ? $p['lbhome'] . '/config/system/general.json' : '');
+}
+
+/** Kontext fuer die gemeinsame Sprachausgabe (Nr. 36 b): Webport und Kopfzeile
+ *  dieses Plugins; $ua '' heisst: keine Kopfzeile User-Agent (Music Server, wie
+ *  bisher). Keine Merkdatei des Moduls - <art>_letzte.json fuehrt die Linie in
+ *  Stufe 1 weiter selbst. */
+function mo_ansage_k($ua = 'LoxBerry Robonect')
+{
+    return array('port' => mo_webport(), 'kopf' => ($ua === '' ? array() : array('User-Agent: ' . $ua)),
+                 'ordner' => '');
 }
 
 function mo_alexa_adresse()
@@ -2935,7 +2949,7 @@ function mo_alexa_adresse()
 /** Sprechtoken: 8 bis 128 Buchstaben, Ziffern, _ und - (Alexa-NG erzeugt 24 Hexzeichen). */
 function mo_alexa_token_ok($t)
 {
-    return is_string($t) && preg_match('/^[A-Za-z0-9_\-]{8,128}\z/', $t) === 1;
+    return ansage_token_ok($t);     // Nr. 36 b: dieselbe Form, eine Quelle
 }
 
 /** Geraet: leer (= Standardgeraet von Alexa-NG) oder 1 bis 200 Zeichen UTF-8,
@@ -2983,81 +2997,18 @@ function mo_ng_art($art)
  */
 function mo_ng_rufen($url, array $felder, $tmo = 10)
 {
-    $koerper = http_build_query($felder, '', '&');
-    $kopf = array('User-Agent: LoxBerry Robonect', 'Content-Type: application/x-www-form-urlencoded');
-    $code = 0;
-    $rumpf = '';
-    $gid = '';
-    if (function_exists('curl_init')) {
-        $ch = curl_init($url);
-        curl_setopt_array($ch, array(
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_POST => true,
-            CURLOPT_POSTFIELDS => $koerper,
-            CURLOPT_FOLLOWLOCATION => false,
-            CURLOPT_NOPROXY => '127.0.0.1',
-            CURLOPT_TIMEOUT => $tmo,
-            CURLOPT_CONNECTTIMEOUT => min(3, $tmo),
-            CURLOPT_HTTPHEADER => $kopf,
-        ));
-        $r = curl_exec($ch);
-        $errno = curl_errno($ch);
-        if ($r !== false) {
-            $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            $rumpf = (string) $r;
-        }
-        if (PHP_VERSION_ID < 80000) { curl_close($ch); }
-        if ($r === false) {
-            $gid = ($errno === 28) ? 'HTTP_ZEIT' : (($errno === 7) ? 'HTTP_ABGEWIESEN' : 'HTTP_FEHLER');
-        }
-    } else {
-        $alt = ini_get('default_socket_timeout');
-        @ini_set('default_socket_timeout', (string) min(3, $tmo));
-        $ctx = stream_context_create(array('http' => array(
-            'method' => 'POST',
-            'header' => implode("\r\n", $kopf),
-            'content' => $koerper,
-            'timeout' => $tmo,
-            'follow_location' => 0,
-            'ignore_errors' => true,
-        )));
-        $t0 = microtime(true);
-        $fh = @fopen($url, 'rb', false, $ctx);
-        if ($fh !== false) {
-            $r = stream_get_contents($fh);
-            $meta = stream_get_meta_data($fh);
-            fclose($fh);
-            if (!empty($meta['timed_out'])) {
-                $gid = 'HTTP_ZEIT';
-            } else {
-                $rumpf = (string) $r;
-                if (isset($meta['wrapper_data']) && is_array($meta['wrapper_data'])) {
-                    foreach ($meta['wrapper_data'] as $z) {
-                        if (preg_match('#^HTTP/\S+\s+(\d{3})#', (string) $z, $m)) { $code = (int) $m[1]; }
-                    }
-                }
-                if ($code === 0) { $gid = 'HTTP_FEHLER'; }
-            }
-        } else {
-            $l = error_get_last();
-            $msg = is_array($l) ? (string) $l['message'] : '';
-            if (stripos($msg, 'timed out') !== false || microtime(true) - $t0 >= $tmo - 0.5) {
-                $gid = 'HTTP_ZEIT';
-            } elseif (stripos($msg, 'refused') !== false || stripos($msg, 'verweigert') !== false) {
-                $gid = 'HTTP_ABGEWIESEN';
-            } else {
-                $gid = 'HTTP_FEHLER';
-            }
-        }
-        @ini_set('default_socket_timeout', (string) $alt);
+    /* Nr. 36 b, Stufe 1: gerufen ueber die gemeinsame Sprachausgabe (curl, sonst
+     * Datenstrom; ohne Weiterleitung, ohne Proxy; Verbindungsaufbau hoechstens
+     * 3 s, gesamt $tmo wie bisher). Rueckgabe wie bisher; von den
+     * Transportkennungen des Moduls bleiben die drei der Linie (HTTP_ZEIT,
+     * HTTP_ABGEWIESEN, sonst HTTP_FEHLER), damit Texte und Merkdateien gleich
+     * bleiben. */
+    $a = ansage_ng_rufen((string) $url, $felder, $tmo, mo_ansage_k());
+    $gid = $a['grund_id'];
+    if ($gid !== '' && $gid !== 'HTTP_ZEIT' && $gid !== 'HTTP_ABGEWIESEN') {
+        $gid = 'HTTP_FEHLER';
     }
-    $zeilen = preg_split('/\r?\n/', trim($rumpf));
-    $erste = trim((string) $zeilen[0]);
-    if (isset($felder['token']) && is_string($felder['token']) && $felder['token'] !== '') {
-        $erste = str_replace($felder['token'], '***', $erste);
-    }
-    $erste = substr((string) preg_replace('/[\x00-\x1F\x7F]/', '', $erste), 0, 200);
-    return array('code' => $code, 'zeile' => $erste, 'grund_id' => $gid, 'tmo' => (int) $tmo);
+    return array('code' => $a['code'], 'zeile' => $a['zeile'], 'grund_id' => $gid, 'tmo' => (int) $tmo);
 }
 
 /**
@@ -3231,44 +3182,19 @@ function mo_pruef_alexang(array $cfg, $offen)
 
 
 function mo_tts_url($text) {
-    $cfg = mo_config(); $tts = $cfg['tts']; $mode = $tts['mode'];
-    if ($mode === 'audioserver') { return null; }
-    if ($mode === 'musicserver' && (string) $tts['ip'] === '') {
-        return '';   // ohne IP laesst sich die Music-Server-Adresse nicht bauen
+    /* Nr. 36 b, Stufe 1: die Adresse baut die gemeinsame Sprachausgabe
+     * (ansage_tts_url()) - dieselbe Zonenliste (einmal fuer alle Modi
+     * normalisiert), dieselbe Lautstaerke je Zone, dieselbe Vorgabe-Vorlage
+     * fuer MS4H, die IP nur, wenn die Vorlage sie benutzt. Wie bisher laeuft
+     * jeder Wert von mode ausser musicserver und audioserver ueber die
+     * Vorlage; Zahlen in den Textfeldern gelten wie bisher als Text. */
+    $cfg = mo_config(); $tts = $cfg['tts'];
+    if ($tts['mode'] === 'audioserver') { return null; }
+    if ($tts['mode'] !== 'musicserver') { $tts['mode'] = 'custom'; }
+    foreach (array('ip', 'zones', 'lang', 'template') as $s) {
+        if (isset($tts[$s]) && is_scalar($tts[$s])) { $tts[$s] = (string) $tts[$s]; }
     }
-
-    /* Zonenliste EINMAL fuer alle Modi normalisieren. Vorher wurde nur im
-     * Modus musicserver je Zone getrimmt; in den Vorlagen-Modi ging die
-     * Eingabe roh in {zones} - aus "2, 4, 6" wurde eine Adresse mit
-     * Leerzeichen. */
-    $zl = array();
-    foreach (explode(',', (string) $tts['zones']) as $z) {
-        $z = trim($z);
-        if ($z !== '') { $zl[] = $z; }
-    }
-    $tts['zones'] = implode(',', $zl);
-    if ($mode === 'musicserver') {
-        $vol = max(1, min(100, (int) $tts['volume']));
-        $zones = array();
-        foreach (explode(',', (string) $tts['zones']) as $z) {
-            $z = trim($z);
-            if ($z === '') { continue; }
-            $zones[] = (strpos($z, '~') === false) ? $z . '~' . $vol : $z;
-        }
-        $zoneStr = $zones ? implode(',', $zones) : '1~' . $vol;
-        return 'http://' . $tts['ip'] . ':' . (int) $tts['port'] . '/audio/grouped/tts/' . $zoneStr . '/' . rawurlencode($tts['lang'] . '|' . $text);
-    }
-    $tpl = trim((string) $tts['template']);
-    if ($tpl === '') { $tpl = 'http://{ip}:{port}/tts?text={text}&zone={zones}&vol={vol}'; }
-    /* Die IP wird nur verlangt, wenn die Vorlage sie auch verwendet.
-     * Vorher stand die Pruefung unbedingt am Anfang der Funktion - eine
-     * eigene Vorlage ohne {ip} war damit unbenutzbar (AWM-1.2.0-Fund,
-     * hier nachgezogen). */
-    if ((string) $tts['ip'] === '' && strpos($tpl, '{ip}') !== false) {
-        return '';
-    }
-    return str_replace(array('{ip}', '{port}', '{zones}', '{vol}', '{lang}', '{text}'),
-        array($tts['ip'], (int) $tts['port'], $tts['zones'], (int) $tts['volume'], $tts['lang'], rawurlencode($text)), $tpl);
+    return ansage_tts_url((string) $text, $tts);
 }
 /**
  * Eine Ansage sprechen. Rueckgabe (Durchgang 01.10.2026, fuer den Knopf
@@ -3311,21 +3237,18 @@ function mo_say($text) {
         mo_log('Ansage uebersprungen: keine TTS-IP konfiguriert');
         return array(false, mo_t('TEXT.ANSAGE_KEINE_IP'));
     }
-    /* B1 (04.09.2026): 'timeout' deckt nur das LESEN. Fuer den
-     * Verbindungsaufbau gilt default_socket_timeout - ab Werk sechzig
-     * Sekunden. mo_api_roh() ist deshalb schon berichtigt, mo_say() war es
-     * nicht: ein eingetragener, aber Pakete verwerfender Music-Server haette
-     * einen Cron-Durchlauf bis zu einer Minute aufgehalten, der naechste
-     * waere an der Sperre abgeprallt und das Lebenszeichen ausgeblieben.
-     * Dieselben drei Sekunden wie beim Maeher, dieselbe Rueckstellung. */
-    $alt = ini_get('default_socket_timeout');
-    @ini_set('default_socket_timeout', '3');
-    $ctx = stream_context_create(array('http' => array(
-        'timeout' => 5, 'follow_location' => 0, 'max_redirects' => 1)));
-    $r = @file_get_contents($url, false, $ctx);
-    @ini_set('default_socket_timeout', (string) $alt);
-    mo_log('Ansage gesendet: "' . $text . '" -> ' . ($r !== false ? 'OK' : 'FEHLER'));
-    return array($r !== false, $r !== false ? '' : mo_t('TEXT.ANSAGE_FEHLER'));
+    /* Nr. 36 b, Stufe 1: abgerufen ueber die gemeinsame Sprachausgabe - ohne
+     * Weiterleitung, ohne Proxy; gesendet heisst HTTP 2xx (bisher galt auch eine
+     * Antwort 3xx). Zeitgrenze wie bisher 5 s. Den Verbindungsaufbau begrenzt
+     * mit curl das Modul auf 3 s, ohne curl die Frist von 5 s - B1 (04.09.2026:
+     * ab Werk galten sechzig Sekunden fuer den Verbindungsaufbau) bleibt damit
+     * behoben. Ins Protokoll kommt vom Ansagetext nur seine Laenge (Entscheidung
+     * Nr. 40), gezaehlt wie in den Zeilen fuer Alexa-NG und Google darueber. */
+    $k36 = mo_ansage_k('');
+    $a36 = ansage_ausfuehren(ansage_anfrage('GET', $url, null, 5, $k36), $k36);
+    $ok = ($a36['code'] >= 200 && $a36['code'] < 300);
+    mo_log('Ansage gesendet (' . strlen((string) $text) . ' Zeichen) -> ' . ($ok ? 'OK' : 'FEHLER'));
+    return array($ok, $ok ? '' : mo_t('TEXT.ANSAGE_FEHLER'));
 }
 
 function mo_ann_active($dev = 1) {
@@ -3975,7 +3898,7 @@ function mo_sicherung_erzeugen($mit_warnung = true)
     $cfg = mo_config();
     /* Ansage-2 (Durchgang 01.10.2026): das Sprechtoken von Alexa-NG reist
      * nicht mit - beim Zurueckspielen bleibt das geltende stehen. */
-    if (isset($cfg['tts']) && is_array($cfg['tts'])) { unset($cfg['tts']['alexa_token'], $cfg['tts']['google_token']); }
+    if (isset($cfg['tts']) && is_array($cfg['tts'])) { $cfg['tts'] = ansage_sicherung_bereinigen($cfg['tts']); }   // Nr. 36 b: eine Quelle
     $kopf = array(
         '_hinweis' => 'Einstellungen des LoxBerry-Plugins Rasenmaeher (Robonect). '
                     . 'Enthaelt Zugangsdaten des Maehers und das Aktionstoken - '

@@ -576,6 +576,27 @@ dabei; wer sie nirgends verdrahtet hatte, merkt nichts.
 HTTP 403 mit `SELFTEST;OK=0;ERR=TOKEN`. Es wird dabei nichts geschaltet und
 nichts angefahren. Hausstandard fuer alle Aktionsendpunkte.
 
+## Was 1.1.17 behebt
+
+Gemeinsame Sprachausgabe (Entscheidung 40, Stufe 1).
+Gemessen gegen Attrappen (Music Server, Alexa-NG,
+Chromecast 4 Lox NG) unter PHP 7.4 und 8.5 (Windows) und PHP 8.3 mit und ohne curl (WSL), dazu die Oberfläche unter
+PHP 7.4 und 8.5. Nicht am Gerät, nicht an einem echten Lautsprecher.
+
+* **Ansagen laufen über die gemeinsame Sprachausgabe des Hauses** (`webfrontend/html/sprachausgabe.php`, Fassung
+  1.0.2, in jedem Plugin mit Sprachausgabe dieselbe Datei). Einstellungen, Formular, Texte, Reiter Test und
+  Sicherungsdatei bleiben, wie sie sind; eine Sicherung älterer Fassungen lässt sich weiter zurückspielen.
+* **Der Ansagetext steht nicht mehr im Protokoll**, nur seine Länge, z. B. `Ansage gesendet (37 Zeichen) -> OK`
+  (Music Server, MusicServer4Home, eigene Vorlage; bei Alexa-NG und Google stand schon bisher nur die Länge da).
+  Die Länge zählt wie in den übrigen Zeilen dieses Protokolls die Bytes (ein Umlaut zählt zwei).
+* **Music Server und eigene Vorlage:** Als gesendet gilt nur eine Antwort 2xx. Bisher galt auch eine Umleitung
+  (HTTP 3xx) als gesendet, obwohl die Ansage dort nicht ankam. Die Wartezeit bleibt 5 s.
+* **Webport:** Der Port des LoxBerry wird jetzt auch unter `WEBSERVER.Port` in `general.json` gefunden (bisher nur
+  `Webserver.Port`). Das betrifft die Adressen von Alexa-NG und Chromecast 4 Lox NG. Ein Eintrag mit Zeichen hinter
+  der Zahl (z. B. `8080abc`) gilt jetzt als ungültig, dann wird Port 80 benutzt.
+
+**In Loxone:** nichts zu tun.
+
 ## Was 1.1.16 behebt
 
 Baustein-Liste zum Nachbauen (Nachzug B: X-8, Hausregel A4).
