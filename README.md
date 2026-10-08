@@ -12,6 +12,16 @@ Zugangsdaten lokal (Dateirechte 0600, HTTP-Basic-Auth) — Loxone ruft nur noch
 
 Kompatibel mit LoxBerry 3.x und **LoxBerry 4** (reines PHP, PHP 7.4 und 8.x).
 
+## Neu in 1.1.19
+
+Kopf wie alle Hausplugins: Statusübersicht über den Reitern, Zusammenfassung oben im ersten Reiter.
+
+* **Statusübersicht über den Reitern** als Tabelle: Abruf (ohne Dienst, Minutencron), letzter Lauf,
+  Zahl der eingerichteten und der erreichbaren Mäher, MQTT ein/aus. Nur Werte, die die Seite schon kennt;
+  keine neue Abfrage. Die Kacheln je Mäher darunter bleiben, wie sie sind.
+* **Zusammenfassung** des Plugins in einem grünen Kasten oben im Reiter Einstellungen.
+* Nur Oberfläche; gerendert unter PHP 7.4, 8.4 und 8.5, nicht am Gerät angesehen.
+
 ## Neu in 1.1.13
 
 Sammelnachzug vom 30.09.2026, sonst keine Änderung: `curl_close()` wird nur

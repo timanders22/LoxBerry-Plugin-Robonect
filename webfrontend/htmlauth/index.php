@@ -758,6 +758,29 @@ $mw_host = mw_e(isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : '<loxberr
 <div class="sm-alert sm-info"><b><?php echo mw_e(mo_t('TEXT.NOCH_KEIN_MHER_EINGERICHTET')); ?></b> <?php echo mw_e(mo_t('TEXT.BITTE_UNTEN_ADRESSE_BENUTZER_UND_P')); ?></div>
 <?php } ?>
 
+<?php /* Kopf (Entscheidung Nr. 43, seit 1.1.19): Statusuebersicht ueber den
+   Reitern, immer sichtbar - die Kacheln darunter gibt es nur je eingerichtetem
+   Maeher. Robonect hat keinen Dienst, der Abruf laeuft im Minutencron. Nur
+   Werte, die die Seite ohnehin liest ($mw_lauf, $mw_list, $mw_states,
+   $mw_cfg); keine Netzabfrage. */
+$mw_kerr = 0;
+foreach ($mw_states as $mw_ks) { if (!empty($mw_ks['ok'])) { $mw_kerr++; } }
+$mw_kalt = $mw_lauf['ts'] > 0 ? time() - (int) $mw_lauf['ts'] : -1; ?>
+<table class="sm-tbl" style="max-width:620px">
+<tr><th><?php echo mw_e(mo_t('TEXT.EIGENSCHAFT')); ?></th><th><?php echo mw_e(mo_t('TEXT.WERT')); ?></th></tr>
+<tr><td><?php echo mw_e(mo_t('TEXT.KOPF_ABRUF')); ?></td>
+    <td><?php echo mw_e(mo_t('TEXT.KOPF_OHNE_DIENST')); ?></td></tr>
+<tr><td><?php echo mw_e(mo_t('TEXT.KOPF_LETZTER_LAUF')); ?></td>
+    <td><?php echo $mw_kalt < 0 ? mw_e(mo_t('TEXT.KOPF_NOCH_KEIN_LAUF'))
+        : mw_e(date('d.m.Y H:i:s', (int) $mw_lauf['ts'])
+               . ($mw_kalt >= 0 && $mw_kalt < 3600 ? ' ' . sprintf(mo_t('TEXT.KOPF_VOR_S'), $mw_kalt) : '')); ?></td></tr>
+<tr><td><?php echo mw_e(mo_t('TEXT.NENN_MAEHER')); ?></td>
+    <td<?php echo $mw_list ? ' class="' . ($mw_kerr === count($mw_list) ? 'sm-an' : 'sm-aus') . '"' : ''; ?>><?php
+        echo mw_e(sprintf(mo_t('TEXT.KOPF_MAEHER_ZAHL'), count($mw_list), $mw_kerr)); ?></td></tr>
+<tr><td><?php echo mw_e(mo_t('TEXT.KOPF_MQTT')); ?></td>
+    <td><?php echo mw_e(!empty($mw_cfg['mqtt_enabled']) ? mo_t('TEXT.KOPF_EIN') : mo_t('TEXT.AUS')); ?></td></tr>
+</table>
+
 <?php /* Statuskacheln statt Fliesstext - die Werte liegen alle schon vor. */ ?>
 <?php foreach ($mw_states as $mw_k => $mw_s) { ?>
 <h3 class="sm-h3"><?php echo mw_e($mw_s['name']); ?></h3>
@@ -798,6 +821,7 @@ $mw_host = mw_e(isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : '<loxberr
 
 <!-- ================= Einstellungen ================= -->
 <div class="sm-seite<?php echo $mw_tab === 'tab-settings' ? ' sm-active' : ''; ?>" id="tab-settings">
+<div class="sm-hinweis"><?php echo mo_t('TEXT.WAS_IST_DAS'); ?></div>
 <form action="index.php" method="post" autocomplete="off">
 <?php echo mo_fmt_feld(); ?>
 <input data-role="none" type="hidden" name="save" value="1">
