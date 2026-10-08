@@ -20,8 +20,8 @@ date_default_timezone_set('Europe/Berlin');
 
 
 /* Gemeinsame Sprachausgabe (Abschrift von Werkzeuge/gemeinsam/sprachausgabe.php,
- * Nr. 36 b, Stufe 1). Liegt neben dieser Datei; sie legt beim Einbinden nur
- * Funktionen an und schuetzt sich selbst gegen doppeltes Laden. */
+ * Nr. 36 b; seit 1.1.18 Stufe 2 mit Modul 1.1.1). Liegt neben dieser Datei; sie legt
+ * beim Einbinden nur Funktionen an und schuetzt sich selbst gegen doppeltes Laden. */
 require_once __DIR__ . '/sprachausgabe.php';
 
 
@@ -286,6 +286,13 @@ function mo_cfg_vervollstaendigen(&$cfg)
     foreach (mo_vorgaben() as $k => $v) {
         if (!array_key_exists($k, $roh)) { $fehlten[] = $k; }
         if (!array_key_exists($k, $cfg)) { $cfg[$k] = $v; }
+    }
+    /* Nr. 36 b, Stufe 2 (1.1.18): auch die Eintraege des Blocks tts - eine Konfiguration aus
+     * 1.1.17 kennt sonos_zone/sonos_laut nicht. $cfg traegt sie schon (mo_config()); hier
+     * werden sie genannt, damit Oberflaeche und Cron sie EINMAL in die Datei schreiben. */
+    if (isset($roh['tts']) && is_array($roh['tts'])) {
+        list(, $mo_tts_fehlten) = ansage_vervollstaendigen($roh['tts'], 'musicserver');
+        foreach ($mo_tts_fehlten as $mo_n) { $fehlten[] = 'tts.' . $mo_n; }
     }
     return $fehlten;
 }
@@ -601,15 +608,11 @@ function mo_config(&$zustand = null, $erzeugen = true) {
     if (!is_array($cfg['notify'])) { $cfg['notify'] = array(); }
     if (!is_array($cfg['tts'])) { $cfg['tts'] = array(); }
     $cfg['notify'] += array('audio' => 0, 'push' => 0, 'fehler' => 1, 'fertig' => 1, 'messer' => 1, 'akku' => 0);
-    $cfg['tts'] += array('mode' => 'musicserver', 'ip' => '', 'port' => 7091,
-                         'zones' => '1', 'volume' => 8, 'lang' => 'de', 'template' => '',
-                         /* Ansage-2 (Durchgang 01.10.2026): Alexa-NG, ab Werk
-                          * nicht gewaehlt; das Token ist ein Geheimnis. */
-                         'alexa_geraet' => '', 'alexa_token' => '', 'alexa_laut' => -1,
-                         /* Ansage-3 (gs_ro, 01.10.2026): Google-Lautsprecher ueber
-                          * Chromecast 4 Lox NG, ab Werk nicht gewaehlt; eigenes
-                          * Sprechtoken, ebenfalls ein Geheimnis. */
-                         'google_geraet' => '', 'google_token' => '', 'google_laut' => -1);
+    /* Nr. 36 b, Stufe 2 (1.1.18): die Vorgaben des Blocks tts kommen aus der gemeinsamen
+     * Sprachausgabe - dieselben Werte wie bis 1.1.17 (ab Werk unveraendert: Music Server ohne
+     * IP; eingeschaltet wird mit dem Haken notify.audio), seit Modul 1.1.x dazu sonos_zone und
+     * sonos_laut. Vorhandene Werte bleiben; die Sprechtoken sind Geheimnisse. */
+    list($cfg['tts']) = ansage_vervollstaendigen($cfg['tts'], 'musicserver');
     return $cfg;
 }
 
@@ -2907,348 +2910,97 @@ function mo_zusatzwerte($dev = 1)
     return $out;
 }
 
-/* ---------------- Ansage (TTS) ---------------- */
-
-/* ---------------- Ausgabeart Alexa-NG (Ansage-2, Durchgang 01.10.2026; ab Werk nicht gewaehlt) ----------------
+/* ---------------- Ansage (TTS) ----------------
  *
- * Das eigene Plugin LoxBerry-Plugin-Alexa-NG (Ordner alexang) laesst
- * Amazon-Echo-Geraete sprechen: https://github.com/timanders22/LoxBerry-Plugin-Alexa-NG
- * Aufruf per POST an seinen Endpunkt auf DIESEM LoxBerry (Port aus der
- * general.json): das Sprechtoken steht so in keiner Adresse und keinem
- * Zugriffsprotokoll. Das Token ist ein Geheimnis wie ein Kennwort: nie in der
- * Seite, nicht in der Sicherung, nicht in der Einmalmeldung, nie im
- * Protokoll (auch nicht in der Antwortzeile von Alexa-NG). Faellt Alexa-NG
- * aus, entfaellt die Ansage - kein stiller Wechsel auf einen anderen
- * Lautsprecher; Protokoll, Testansage und Reiter Test nennen HTTP-Code und
- * GRUND. Bauform abfahrt_alexa_*() (Abfahrts-Assistent 1.6.19). */
+ * Nr. 36 b, Stufe 2 (1.1.18): gesprochen, geprueft und gezeichnet wird ueber die gemeinsame
+ * Sprachausgabe (sprachausgabe.php, Abschrift 1.1.1): ansage_sprechen() fuer alle Ausgabearten
+ * (Loxone Music Server, MusicServer4Home, eigene Vorlage, Alexa-NG, Google-Lautsprecher ueber
+ * Chromecast 4 Lox NG), ansage_formular_html()/_lesen() im Reiter Einstellungen,
+ * ansage_testansage() hinter dem Knopf im Reiter Test, ansage_pruefzeile() fuer die Zeile dort.
+ * Bis 1.1.17 (Stufe 1) fuehrte die Linie eigene Zweige (mo_ng_rufen/_bewerten/_sprechen/_pruef,
+ * mo_tts_url, eigener Ruf an den Music Server, eigene Wertpruefung); sie sind entfallen.
+ *
+ * Ab Werk unveraendert: Ausgabeart Music Server ohne IP; gesprochen wird nur mit dem Haken
+ * "Audioausgabe aktiv" (notify.audio, ab Werk aus); dieselben sechs Ausgabearten wie bisher
+ * (ohne 'aus' - der Haken ist der Schalter - und ohne Sonos4Lox). Neu und gewollt: Adresse und
+ * Vorlage muessen im Heimnetz liegen (Speichern, Zurueckspielen und vor jedem Senden); 10 s
+ * Zeitgrenze wie in allen Linien (bis 1.1.17 beim Music Server 5 s); ins Protokoll nur die
+ * Kurzform ansage_kurz() - nie Text, Token oder die Adresse des Music Servers.
+ */
 
-/** Der Webport dieses LoxBerry aus der general.json (Webserver.Port), sonst 80. */
+/** Der Webport dieses LoxBerry aus der general.json (Webserver.Port oder WEBSERVER.Port), sonst 80. */
 function mo_webport()
 {
-    /* Nr. 36 b, Stufe 1: gemeinsame Sprachausgabe. Liest Webserver.Port und
-     * WEBSERVER.Port (bisher nur die erste Schreibweise), 1 bis 65535, sonst 80. */
     $p = mo_paths();
     return ansage_webport($p['lbhome'] !== '' ? $p['lbhome'] . '/config/system/general.json' : '');
 }
 
-/** Kontext fuer die gemeinsame Sprachausgabe (Nr. 36 b): Webport und Kopfzeile
- *  dieses Plugins; $ua '' heisst: keine Kopfzeile User-Agent (Music Server, wie
- *  bisher). Keine Merkdatei des Moduls - <art>_letzte.json fuehrt die Linie in
- *  Stufe 1 weiter selbst. */
-function mo_ansage_k($ua = 'LoxBerry Robonect')
+/** Die Ausgabearten dieser Linie - dieselben sechs wie bis 1.1.17. */
+function mo_ansage_modi()
 {
-    return array('port' => mo_webport(), 'kopf' => ($ua === '' ? array() : array('User-Agent: ' . $ua)),
-                 'ordner' => '');
+    return array('musicserver', 'ms4h', 'audioserver', 'custom', 'alexang', 'cc4lox');
 }
 
-function mo_alexa_adresse()
+/** Optionen fuer Formular-Baustein und Formular-Lesen: die Ausgabearten und die POST-Namen der
+ *  Loeschhaken, wie sie bis 1.1.17 hiessen (tts_alexa_loeschen, tts_google_loeschen). */
+function mo_ansage_opt()
 {
-    return 'http://127.0.0.1:' . mo_webport() . '/plugins/alexang/index.php';
-}
-
-/** Sprechtoken: 8 bis 128 Buchstaben, Ziffern, _ und - (Alexa-NG erzeugt 24 Hexzeichen). */
-function mo_alexa_token_ok($t)
-{
-    return ansage_token_ok($t);     // Nr. 36 b: dieselbe Form, eine Quelle
-}
-
-/** Geraet: leer (= Standardgeraet von Alexa-NG) oder 1 bis 200 Zeichen UTF-8,
- *  ohne Steuerzeichen und ohne Leerraum am Rand (Name, Kommaliste,
- *  gruppe:<name> oder alle - das prueft Alexa-NG selbst). */
-function mo_alexa_geraet_ok($g)
-{
-    return is_string($g) && ($g === ''
-        || (preg_match('/^.{1,200}\z/us', $g) === 1 && preg_match('/[\x00-\x1F\x7F]/', $g) !== 1
-            && trim($g) === $g));
-}
-
-/* ---------------- Ausgabeart Google-Lautsprecher (Ansage-3, gs_ro, 01.10.2026; ab Werk nicht gewaehlt) ----------------
- *
- * Das Plugin Chromecast 4 Lox NG (Ordner chromecast-4lox-ng, ab 1.3.15) spricht
- * Ansagen auf Chromecast-/Nest-Lautsprechern: https://github.com/timanders22/LoxBerry-Plugin-Chromecast4lox
- * Die Schnittstelle ist mit Alexa-NG gleich (POST aktion=sprechen, token,
- * text, geraet, laut; Antwortzeile mit GRUND); verschieden sind nur die
- * Adresse, die Geraetenamen und das eigene Sprechtoken tts.google_token
- * (getrennt vom Alexa-Token). Angenommen wird nur von diesem LoxBerry
- * (127.0.0.1). Token und Geraet haben dieselbe Form wie bei Alexa-NG -
- * mo_alexa_token_ok() und mo_alexa_geraet_ok() gelten fuer beide. Faellt
- * Chromecast 4 Lox NG aus, entfaellt die Ansage: kein Wiederholen, kein
- * stiller Wechsel auf einen anderen Lautsprecher. */
-function mo_google_adresse()
-{
-    return 'http://127.0.0.1:' . mo_webport() . '/plugins/chromecast-4lox-ng/index.php';
-}
-
-/** Kennungsvorsatz, Schluesselvorsatz in tts und Adresse je Ausgabeart
- *  ('alexa' = Alexa-NG, 'google' = Chromecast 4 Lox NG). */
-function mo_ng_art($art)
-{
-    if ($art === 'google') { return array('GOOGLE', 'google_', mo_google_adresse()); }
-    return array('ALEXA', 'alexa_', mo_alexa_adresse());
+    return array('modi' => mo_ansage_modi(),
+                 'namen' => array('alexa_token_loeschen' => 'tts_alexa_loeschen',
+                                  'google_token_loeschen' => 'tts_google_loeschen'));
 }
 
 /**
- * POST an Alexa-NG oder Chromecast 4 Lox NG - beide Ausgabearten teilen diesen
- * Weg; die Adresse ist Parameter (Ansage-3, gs_ro: Rumpf zeichengleich aus
- * mo_alexa_rufen() von 1.1.15). Rueckgabe: array('code' => HTTP-Code (0 =
- * keine Antwort), 'zeile' => erste Antwortzeile ohne Token und Steuerzeichen,
- * 'grund_id' => Kennung des Transportfehlers, 'tmo' => Wartezeit). Ohne
- * Weiterleitung; ein Proxy der Umgebung gilt fuer 127.0.0.1 nicht.
+ * Kontext der gemeinsamen Sprachausgabe: Webport, Kopfzeile, Ordner fuer <art>_letzte.json (der
+ * Zwischenordner - dort lagen schon alexa_letzte.json und google_letzte.json, gleiche Form), Texte
+ * aus [ANSAGE]. Zur Kennung TTS_EINTRAG (unbekannter Eintrag im Block tts) hat auch Modul 1.1.1
+ * keinen Satz; die Linie nennt ihren eigenen (wie Intercom und Raumklima).
  */
-function mo_ng_rufen($url, array $felder, $tmo = 10)
+function mo_ansage_k()
 {
-    /* Nr. 36 b, Stufe 1: gerufen ueber die gemeinsame Sprachausgabe (curl, sonst
-     * Datenstrom; ohne Weiterleitung, ohne Proxy; Verbindungsaufbau hoechstens
-     * 3 s, gesamt $tmo wie bisher). Rueckgabe wie bisher; von den
-     * Transportkennungen des Moduls bleiben die drei der Linie (HTTP_ZEIT,
-     * HTTP_ABGEWIESEN, sonst HTTP_FEHLER), damit Texte und Merkdateien gleich
-     * bleiben. */
-    $a = ansage_ng_rufen((string) $url, $felder, $tmo, mo_ansage_k());
-    $gid = $a['grund_id'];
-    if ($gid !== '' && $gid !== 'HTTP_ZEIT' && $gid !== 'HTTP_ABGEWIESEN') {
-        $gid = 'HTTP_FEHLER';
-    }
-    return array('code' => $a['code'], 'zeile' => $a['zeile'], 'grund_id' => $gid, 'tmo' => (int) $tmo);
+    return array(
+        'port'   => mo_webport(),
+        'kopf'   => array('User-Agent: LoxBerry Robonect'),
+        'ordner' => mo_tmpdir(),
+        't'      => function ($s) { return mo_t($s); },
+        'schluessel' => array('K_TTS_EINTRAG' => 'TEXT.SICH_TTS_EINTRAG'),
+    );
 }
 
-/**
- * Antwort bewerten. Rueckgabe: '' bei "<praefix>;OK=1" mit HTTP 200 (bei
- * Chromecast 4 Lox NG auch UNVERAENDERT und TEXT_NULL - beide tragen OK=1),
- * sonst eine Kennung fuer mo_ng_grund_text() (nie mit dem Token). Fuer
- * Alexa-NG kennungsgleich mit mo_alexa_bewerten() von 1.1.15. 404 ohne GRUND
- * heisst: das Plugin fehlt (bei Chromecast 4 Lox NG auch: aelter als 1.3.15).
- */
-function mo_ng_bewerten(array $a, $praefix, $art)
+/** Der Block tts der geltenden Konfiguration (vervollstaendigt, ab Werk musicserver). */
+function mo_tts()
 {
-    list($k, , $adr) = mo_ng_art($art);
-    if ($a['code'] === 200 && strpos($a['zeile'], $praefix . ';OK=1') === 0) {
-        return '';
-    }
-    if ($a['code'] <= 0) {
-        return $k . '_KEINE_ANTWORT|' . $adr . '|' . (int) $a['tmo']
-             . '|' . ($a['grund_id'] !== '' ? $a['grund_id'] : 'HTTP_FEHLER');
-    }
-    if (preg_match('/(?:^|;)GRUND=([A-Za-z0-9_]{1,40})(?:;|$)/', $a['zeile'], $m)) {
-        return $k . '_ANTWORT|' . (int) $a['code'] . '|' . $m[1];
-    }
-    if ($a['code'] === 404) {
-        return $k . '_FEHLT|' . $adr;
-    }
-    $s = substr((string) preg_replace('/[^A-Za-z0-9;=_.:\-]/', '', $a['zeile']), 0, 60);
-    return $k . '_UNERWARTET|' . (int) $a['code'] . '|' . ($s !== '' ? $s : '-');
-}
-
-/** Klartext zu einer Kennung aus mo_ng_bewerten() - roh, ohne Auszeichnung.
- *  Bei Chromecast 4 Lox NG haengt an einem bekannten GRUND eine Erklaerung
- *  (TEXT.GOOGLE_G_<GRUND>); fuer Alexa-NG gibt es keine solchen Texte. */
-function mo_ng_grund_text($gid)
-{
-    $t = explode('|', (string) $gid);
-    switch ($t[0]) {
-        case 'ALEXA_KEIN_TOKEN':
-        case 'GOOGLE_KEIN_TOKEN':
-            return mo_t('TEXT.' . $t[0]);
-        case 'ALEXA_KEINE_ANTWORT':
-        case 'GOOGLE_KEINE_ANTWORT':
-            $art = isset($t[3]) ? $t[3] : 'HTTP_FEHLER';
-            return sprintf(mo_t('TEXT.' . $t[0]), isset($t[1]) ? $t[1] : '',
-                           isset($t[2]) ? (int) $t[2] : 0, mo_t('TEXT.' . $art));
-        case 'ALEXA_ANTWORT':
-            return sprintf(mo_t('TEXT.ALEXA_ANTWORT'), isset($t[1]) ? (int) $t[1] : 0, isset($t[2]) ? $t[2] : '-');
-        case 'GOOGLE_ANTWORT':
-            $g = isset($t[2]) ? $t[2] : '-';
-            $erkl = mo_t('TEXT.GOOGLE_G_' . $g);
-            return sprintf(mo_t('TEXT.GOOGLE_ANTWORT'), isset($t[1]) ? (int) $t[1] : 0, $g)
-                 . ($erkl !== 'TEXT.GOOGLE_G_' . $g ? ' ' . $erkl : '');
-        case 'ALEXA_FEHLT':
-        case 'GOOGLE_FEHLT':
-            return sprintf(mo_t('TEXT.' . $t[0]), isset($t[1]) ? $t[1] : '');
-        case 'ALEXA_UNERWARTET':
-        case 'GOOGLE_UNERWARTET':
-            return sprintf(mo_t('TEXT.' . $t[0]), isset($t[1]) ? (int) $t[1] : 0, isset($t[2]) ? $t[2] : '-');
-    }
-    return (string) $gid;
-}
-
-/** Fuer Alexa-NG: Name und Verhalten wie in 1.1.15 (Aufrufer unveraendert). */
-function mo_alexa_grund_text($gid)
-{
-    return mo_ng_grund_text($gid);
-}
-
-/**
- * Eine Ansage ueber Alexa-NG ($art 'alexa') oder Chromecast 4 Lox NG ('google').
- * Rueckgabe: '' = angenommen, sonst die Kennung des Grundes. Geraet,
- * Lautstaerke und Sprechtoken aus den Einstellungen der Ausgabeart. $antwort
- * bekommt "HTTP <code>, <erste Antwortzeile>" (ohne Token) fuer Testansage und
- * Protokoll. Das Ergebnis (Zeit, ok, Kennung - nie Token oder Text) liegt
- * danach in <art>_letzte.json im Zwischenordner, fuer den Reiter Test.
- */
-function mo_ng_sprechen($text, array $cfg, $art, &$antwort = null)
-{
-    list($k, $v, $adr) = mo_ng_art($art);
-    $t = $cfg['tts'];
-    $tok = isset($t[$v . 'token']) ? $t[$v . 'token'] : '';
-    $antwort = '';
-    if (!mo_alexa_token_ok($tok)) {
-        $gid = $k . '_KEIN_TOKEN';
-    } else {
-        $f = array('aktion' => 'sprechen', 'token' => $tok);
-        $g = (isset($t[$v . 'geraet']) && is_string($t[$v . 'geraet'])) ? $t[$v . 'geraet'] : '';
-        if ($g !== '') { $f['geraet'] = $g; }
-        $laut = isset($t[$v . 'laut']) ? (int) $t[$v . 'laut'] : -1;
-        if ($laut >= 0 && $laut <= 100) { $f['laut'] = $laut; }
-        $f['text'] = (string) $text;
-        $a = mo_ng_rufen($adr, $f, 10);
-        $antwort = 'HTTP ' . (int) $a['code'] . ($a['zeile'] !== '' ? ', ' . $a['zeile'] : '');
-        $gid = mo_ng_bewerten($a, 'SPRECHEN', $art);
-    }
-    mo_write_json(mo_tmpdir() . '/' . $art . '_letzte.json',
-        array('zeit' => time(), 'ok' => $gid === '' ? 1 : 0, 'grund_id' => $gid));
-    return $gid;
-}
-
-/** Fuer Alexa-NG: Name und Verhalten wie in 1.1.15 (alexa_letzte.json). */
-function mo_alexa_sprechen($text, array $cfg)
-{
-    return mo_ng_sprechen($text, $cfg, 'alexa');
-}
-
-/** Das Ergebnis der letzten Ansage der Ausgabeart, oder null. */
-function mo_ng_letzte($art)
-{
-    $d = mo_json_lesen(mo_tmpdir() . '/' . $art . '_letzte.json');
-    if (!isset($d['zeit'], $d['ok'])) { return null; }
-    return array('zeit' => (int) $d['zeit'], 'ok' => (int) $d['ok'],
-                 'grund_id' => (isset($d['grund_id']) && is_string($d['grund_id'])) ? $d['grund_id'] : '');
-}
-
-/**
- * Zeile im Reiter Test fuer Alexa-NG ('alexa') oder Chromecast 4 Lox NG
- * ('google'): array(Stand 1/0/2, Text als HTML). Gefragt wird selftest=1
- * (prueft nur das Token, spricht nicht) und nur, wenn der Reiter Test die
- * geladene Seite ist - sonst kostete jeder Seitenaufbau bis zu 10 s, wenn die
- * Gegenstelle haengt. Chromecast 4 Lox NG meldet im Selbsttest zusaetzlich
- * SPRECHEN=0 (Sprachausgabe dort aus) und DIENST=0 (Dienst laeuft nicht):
- * das Token passt dann, gesprochen wird trotzdem nicht - Hinweis, Stand 2.
- */
-function mo_ng_pruef(array $cfg, $offen, $art)
-{
-    list($k, $v, $adr) = mo_ng_art($art);
-    $tok = isset($cfg['tts'][$v . 'token']) ? $cfg['tts'][$v . 'token'] : '';
-    if (!mo_alexa_token_ok($tok)) {
-        return array(0, mw_e(mo_ng_grund_text($k . '_KEIN_TOKEN')));
-    }
-    if (!$offen) {
-        return array(2, mw_e(mo_t('TEXT.PRUEF_' . $k . '_ZU')));
-    }
-    $a = mo_ng_rufen($adr, array('selftest' => '1', 'token' => $tok), 10);
-    $gid = mo_ng_bewerten($a, 'SELFTEST', $art);
-    $stand = 1;
-    $hinweis = '';
-    if ($gid === '' && $art === 'google') {
-        foreach (array('SPRECHEN' => 'TEXT.PRUEF_GOOGLE_SPRECHEN_AUS', 'DIENST' => 'TEXT.PRUEF_GOOGLE_DIENST_AUS') as $feld => $schl) {
-            if (preg_match('/(?:^|;)' . $feld . '=0(?:;|$)/', $a['zeile']) === 1) {
-                $hinweis .= ' ' . mw_e(mo_t($schl));
-                $stand = 2;
-            }
-        }
-    }
-    $letzte = '';
-    $l = mo_ng_letzte($art);
-    if ($l !== null) {
-        $s = max(0, time() - $l['zeit']);
-        $alter = $s < 90 ? $s . ' s' : ($s < 5400 ? (int) round($s / 60) . ' min'
-               : ($s < 172800 ? (int) round($s / 3600) . ' h' : (int) round($s / 86400) . ' d'));
-        if ($l['ok'] === 1) {
-            $letzte = ' ' . mw_e(sprintf(mo_t('TEXT.PRUEF_' . $k . '_LETZTE_OK'), $alter));
-        } else {
-            $letzte = ' ' . mw_e(sprintf(mo_t('TEXT.PRUEF_' . $k . '_LETZTE_FEHL'), $alter,
-                                         mo_ng_grund_text($l['grund_id'])));
-            $stand = 2;
-        }
-    }
-    if ($gid !== '') {
-        return array(0, mw_e(sprintf(mo_t('TEXT.PRUEF_' . $k . '_FEHL'), mo_ng_grund_text($gid))) . $letzte);
-    }
-    return array($stand, mw_e(sprintf(mo_t('TEXT.PRUEF_' . $k . '_JA'), $adr)) . $hinweis . $letzte);
-}
-
-/** Fuer Alexa-NG: Name und Verhalten wie in 1.1.15 (Aufrufer unveraendert). */
-function mo_pruef_alexang(array $cfg, $offen)
-{
-    return mo_ng_pruef($cfg, $offen, 'alexa');
-}
-
-
-function mo_tts_url($text) {
-    /* Nr. 36 b, Stufe 1: die Adresse baut die gemeinsame Sprachausgabe
-     * (ansage_tts_url()) - dieselbe Zonenliste (einmal fuer alle Modi
-     * normalisiert), dieselbe Lautstaerke je Zone, dieselbe Vorgabe-Vorlage
-     * fuer MS4H, die IP nur, wenn die Vorlage sie benutzt. Wie bisher laeuft
-     * jeder Wert von mode ausser musicserver und audioserver ueber die
-     * Vorlage; Zahlen in den Textfeldern gelten wie bisher als Text. */
-    $cfg = mo_config(); $tts = $cfg['tts'];
-    if ($tts['mode'] === 'audioserver') { return null; }
-    if ($tts['mode'] !== 'musicserver') { $tts['mode'] = 'custom'; }
-    foreach (array('ip', 'zones', 'lang', 'template') as $s) {
-        if (isset($tts[$s]) && is_scalar($tts[$s])) { $tts[$s] = (string) $tts[$s]; }
-    }
-    return ansage_tts_url((string) $text, $tts);
-}
-/**
- * Eine Ansage sprechen. Rueckgabe (Durchgang 01.10.2026, fuer den Knopf
- * "Testansage"): array(gesprochen?, Grund als Klartext oder '').
- */
-function mo_say($text) {
     $cfg = mo_config();
-    if (isset($cfg['tts']['mode']) && $cfg['tts']['mode'] === 'cc4lox') {
-        /* Ansage-3 (gs_ro): Google-Lautsprecher ueber Chromecast 4 Lox NG. Als
-         * gesendet gilt nur HTTP 200 mit SPRECHEN;OK=1 (auch UNVERAENDERT und
-         * TEXT_NULL). Ins Protokoll kommen Geraet, Lautstaerke, die Laenge des
-         * Textes und die Antwort (HTTP-Code, GRUND) - nie das Token, nie der
-         * Text. Kein Rueckfall, keine Wiederholung. Das dritte Feld der
-         * Rueckgabe traegt die Antwortzeile fuer die Testansage. */
-        $mo_ga = '';
-        $gid = mo_ng_sprechen($text, $cfg, 'google', $mo_ga);
-        $mo_gg = (isset($cfg['tts']['google_geraet']) && is_string($cfg['tts']['google_geraet'])
-                  && $cfg['tts']['google_geraet'] !== '') ? $cfg['tts']['google_geraet'] : 'Standardgeraet';
-        $mo_gl = (isset($cfg['tts']['google_laut']) && (int) $cfg['tts']['google_laut'] >= 0
-                  && (int) $cfg['tts']['google_laut'] <= 100) ? (string) (int) $cfg['tts']['google_laut'] : 'Ansagelautstaerke';
-        mo_log('Ansage ueber Google-Lautsprecher (Chromecast 4 Lox NG, Geraet ' . $mo_gg . ', Lautstaerke ' . $mo_gl
-            . ', ' . strlen((string) $text) . ' Zeichen) -> '
-            . ($gid === '' ? 'gesendet: ' . $mo_ga : 'FEHLER: ' . mo_ng_grund_text($gid)));
-        return array($gid === '', $gid === '' ? '' : mo_ng_grund_text($gid), $mo_ga);
+    return $cfg['tts'];
+}
+
+/**
+ * Eine Ansage sprechen (Cron: mo_events_check()). Rueckgabe wie bis 1.1.17: array(gesprochen?,
+ * Grund als Klartext oder '', Antwortzeile von Alexa-NG/Chromecast oder ''). Ins Protokoll nur die
+ * Kurzform ansage_kurz() (Art, Stand, Zeichenzahl, HTTP-Code, Kennung). Keine Wiederholung, kein
+ * Wechsel auf einen anderen Lautsprecher.
+ */
+function mo_say($text)
+{
+    $k = mo_ansage_k();
+    $r = ansage_sprechen((string) $text, mo_tts(), $k);
+    mo_log('Ansage: ' . ansage_kurz($r));
+    return array($r['stand'] === 1, $r['stand'] === 1 ? '' : ansage_kennung_text($r['kennung'], $k), $r['zeile']);
+}
+
+/**
+ * Die Zeile "Sprachausgabe" im Reiter Test: array(Stand 1/0/2, HTML). Alexa-NG und Chromecast 4 Lox
+ * NG werden nur bei geoeffnetem Reiter Test gefragt (selftest=1, spricht nicht); der Music Server
+ * nie (eine Probe spraeche). Ist "Audioausgabe aktiv" aus, ist die Zeile ein Strich - aus ist eine
+ * Entscheidung, kein Fehler.
+ */
+function mo_pruef_ansage(array $cfg, $offen)
+{
+    list($st, $html) = ansage_pruefzeile($cfg['tts'], (bool) $offen, mo_ansage_k());
+    if (empty($cfg['notify']['audio'])) {
+        return array(2, mw_e(mo_t('TEXT.PRUEF_ANSAGE_AUS')) . ' ' . $html);
     }
-    if (isset($cfg['tts']['mode']) && $cfg['tts']['mode'] === 'alexang') {
-        /* Ansage-2: der Text kommt nicht ins Protokoll, nur seine Laenge
-         * (wie in Alexa-NG selbst), und nie das Token. */
-        $gid = mo_alexa_sprechen($text, $cfg);
-        mo_log('Ansage ueber Alexa-NG (' . strlen((string) $text) . ' Zeichen) -> '
-            . ($gid === '' ? 'OK' : 'FEHLER: ' . mo_alexa_grund_text($gid)));
-        return array($gid === '', $gid === '' ? '' : mo_alexa_grund_text($gid));
-    }
-    $url = mo_tts_url($text);
-    if ($url === null) {
-        mo_log('Ansage: Modus Audioserver - Ausgabe ueber Loxone Config');
-        return array(false, mo_t('TEXT.ANSAGE_AUDIOSERVER'));
-    }
-    if ($url === '') {
-        mo_log('Ansage uebersprungen: keine TTS-IP konfiguriert');
-        return array(false, mo_t('TEXT.ANSAGE_KEINE_IP'));
-    }
-    /* Nr. 36 b, Stufe 1: abgerufen ueber die gemeinsame Sprachausgabe - ohne
-     * Weiterleitung, ohne Proxy; gesendet heisst HTTP 2xx (bisher galt auch eine
-     * Antwort 3xx). Zeitgrenze wie bisher 5 s. Den Verbindungsaufbau begrenzt
-     * mit curl das Modul auf 3 s, ohne curl die Frist von 5 s - B1 (04.09.2026:
-     * ab Werk galten sechzig Sekunden fuer den Verbindungsaufbau) bleibt damit
-     * behoben. Ins Protokoll kommt vom Ansagetext nur seine Laenge (Entscheidung
-     * Nr. 40), gezaehlt wie in den Zeilen fuer Alexa-NG und Google darueber. */
-    $k36 = mo_ansage_k('');
-    $a36 = ansage_ausfuehren(ansage_anfrage('GET', $url, null, 5, $k36), $k36);
-    $ok = ($a36['code'] >= 200 && $a36['code'] < 300);
-    mo_log('Ansage gesendet (' . strlen((string) $text) . ' Zeichen) -> ' . ($ok ? 'OK' : 'FEHLER'));
-    return array($ok, $ok ? '' : mo_t('TEXT.ANSAGE_FEHLER'));
+    return array($st === 1 ? 1 : ($st === 0 ? 0 : 2), $html);
 }
 
 function mo_ann_active($dev = 1) {
@@ -3304,7 +3056,7 @@ function mo_events_check() {
                 $st['fehlertext'] !== '' ? $st['fehlertext']
                                          : ($st['code'] === 8 ? 'Schleifensignal verloren' : 'Fehler'));
             if (!empty($cfg['notify']['fehler'])) {
-                $meldungen[] = 'Achtung: ' . $st['name'] . ' meldet '
+                $meldungen['fehler'] = 'Achtung: ' . $st['name'] . ' meldet '
                          . ($st['code'] === 8 ? 'Schleifensignal verloren' : 'einen Fehler')
                          . ($st['fehlertext'] !== '' ? ': ' . $st['fehlertext'] : '.');
             }
@@ -3341,7 +3093,7 @@ function mo_events_check() {
             mo_stat_einsatz($min);
             $maeh_start = 0;
             if (!empty($cfg['notify']['fertig'])) {
-                $meldungen[] = $st['name'] . ' ist mit dem Maehen fertig.'
+                $meldungen['fertig'] = $st['name'] . ' ist mit dem Maehen fertig.'
                          . ($min > 0 ? ' Laufzeit ' . $min . ' Minuten.' : '');
             }
         }
@@ -3351,7 +3103,7 @@ function mo_events_check() {
             $af = mo_tmpdir() . '/akku_' . $n . '_' . date('Ymd');
             if (!is_file($af)) {
                 @file_put_contents($af, '1');
-                $meldungen[] = $st['name'] . ': Akku nur noch ' . (int) $st['batterie'] . ' Prozent.';
+                $meldungen['akku'] = $st['name'] . ': Akku nur noch ' . (int) $st['batterie'] . ' Prozent.';
             }
         }
         // Messerwechsel faellig (hoechstens einmal taeglich)
@@ -3359,7 +3111,7 @@ function mo_events_check() {
             $mf = mo_tmpdir() . '/messer_' . $n . '_' . date('Ymd');
             if (!is_file($mf)) {
                 @file_put_contents($mf, '1');
-                $meldungen[] = $st['name'] . ': Messerwechsel faellig - seit dem letzten Wechsel sind '
+                $meldungen['messer'] = $st['name'] . ': Messerwechsel faellig - seit dem letzten Wechsel sind '
                          . max(0, (int) $st['stunden'] - (int) $mw['blade_base']) . ' Betriebsstunden vergangen.';
             }
         }
@@ -3373,7 +3125,10 @@ function mo_events_check() {
             $meldung = implode(' ', $meldungen);
             @touch(mo_tmpdir() . '/ann_' . $n);
             @file_put_contents(mo_tmpdir() . '/anntext_' . $n, $meldung);
-            mo_log('Meldung: ' . $meldung);
+            /* Robonect-k1 (1.1.18, wie Saugroboter-k1; Entscheidung Nr. 18): der Satz ist zugleich
+             * der Ansagetext - ins Protokoll kommen nur die Anlaesse und seine Laenge. Der Satz
+             * selbst steht weiter in anntext_<n> (Zwischenordner). */
+            mo_log('Meldung: ' . implode(', ', array_keys($meldungen)) . ' (' . ansage_zeichen($meldung) . ' Zeichen)');
             if (!empty($cfg['notify']['audio'])) { mo_say('Hallo! ' . $meldung); }
         }
         /* A3 (06.09.2026, gemessen): bis 1.1.5 wurde hier auch der Fehlwert
@@ -4119,115 +3874,32 @@ function mo_wert_pruefen($k, $v)
             return array($out, array());
 
         case 'tts':
+            /* Nr. 36 b, Stufe 2 (1.1.18): gegen die gemeinsame Sprachausgabe - dieselben Regeln wie das
+             * Formular (ansage_formular_lesen()) und das Senden: Heimnetz fuer Adresse und Vorlage,
+             * Zonen, Sprache aus zwei Buchstaben, Lautstaerken 1 bis 100. Ein Teilblock (Sicherung einer
+             * aelteren Fassung) wird angenommen; fehlende Eintraege bekommen ihre Vorgabe. Eine
+             * Sicherung dieses Plugins traegt nie ein Sprechtoken - traegt die Datei eines, wird sie
+             * abgewiesen (kein Wert in der Meldung); die geltenden setzt der Aufrufer wieder ein. */
             if (!is_array($v)) { return array(null, array(mo_mangel('', $k, sprintf(mo_t('TEXT.SICH_WERT'), mo_nennen_e($k))))); }
-            $soll = array('mode', 'ip', 'port', 'zones', 'volume', 'lang', 'template',
-                          'alexa_geraet', 'alexa_laut', 'alexa_token',
-                          'google_geraet', 'google_laut', 'google_token');
-            $fremd = array_diff(array_keys($v), $soll);
-            if ($fremd) {
-                return array(null, array(mo_mangel('', $k, sprintf(mo_t('TEXT.SICH_FREMD'),
-                    htmlspecialchars('tts.' . implode(', tts.', $fremd), ENT_QUOTES, 'UTF-8')))));
-            }
             $liste = array();
-            $falsch = function ($n, $text) use (&$liste) { $liste[] = mo_mangel('tts_' . $n, 'tts.' . $n, $text); };
-            $kaputt = array();
-            foreach ($soll as $n) {
-                if (array_key_exists($n, $v) && !mo_wert_taugt($v[$n])) {
-                    $falsch($n, sprintf(mo_t('TEXT.SICH_WERT'), mo_nennen_e('tts.' . $n)));
-                    $kaputt[$n] = true;
-                }
-            }
-            $has = function ($n) use ($v, $kaputt) { return array_key_exists($n, $v) && !isset($kaputt[$n]); };
-            $mode = $has('mode') ? (string) $v['mode'] : 'musicserver';
-            if (!isset($kaputt['mode'])
-                && !in_array($mode, array('musicserver', 'ms4h', 'audioserver', 'custom', 'alexang', 'cc4lox'), true)) {
-                $falsch('mode', sprintf(mo_t('TEXT.SICH_WERT'), mo_nennen_e('tts.mode')));
-            }
-            $ip = $has('ip') ? trim((string) $v['ip']) : '';
-            if ($ip !== '' && !preg_match('/^[\w\.\-]+$/', $ip)) {
-                $falsch('ip', sprintf(mo_t('TEXT.SICH_WERT'), mo_nennen_e('tts.ip')));
-            }
-            $zahl = function ($n, $vorgabe, $min, $max) use ($v, $has, $falsch, $kaputt) {
-                if (isset($kaputt[$n])) { return null; }
-                if (!$has($n)) { return $vorgabe; }
-                $s = trim((string) $v[$n]);
-                if (preg_match('/^-?[0-9]{1,6}$/', $s) !== 1 || (int) $s < $min || (int) $s > $max) {
-                    $falsch($n, sprintf(mo_t('TEXT.SICH_GANZZAHL'), mo_nennen_e('tts.' . $n), $min, $max));
-                    return null;
-                }
-                return (int) $s;
-            };
-            $port = $zahl('port', 7091, 1, 65535);
-            $volume = $zahl('volume', 8, 1, 100);
-            $zones = $has('zones') ? trim((string) $v['zones']) : '1';
-            if (!isset($kaputt['zones'])) {
-                if ($zones === '') {
-                    $falsch('zones', sprintf(mo_t('TEXT.SICH_LEER_FELD'), mo_nennen_e('tts.zones')));
-                } elseif (!preg_match('/^[0-9~,\s]+$/', $zones)) {
-                    $falsch('zones', sprintf(mo_t('TEXT.SICH_WERT'), mo_nennen_e('tts.zones')));
-                }
-            }
-            $lang = $has('lang') ? strtolower(trim((string) $v['lang'])) : 'de';
-            if (!isset($kaputt['lang'])) {
-                if ($lang === '') {
-                    $falsch('lang', sprintf(mo_t('TEXT.SICH_LEER_FELD'), mo_nennen_e('tts.lang')));
-                } elseif (!preg_match('/^[a-z]{1,5}$/', $lang)) {
-                    $falsch('lang', sprintf(mo_t('TEXT.SICH_WERT'), mo_nennen_e('tts.lang')));
-                }
-            }
-            $tpl = $has('template') ? trim((string) $v['template']) : '';
-            if ($tpl !== '' && (strlen($tpl) > 500
-                || (stripos($tpl, 'http://') !== 0 && stripos($tpl, 'https://') !== 0))) {
-                $falsch('template', sprintf(mo_t('TEXT.SICH_WERT'), mo_nennen_e('tts.template')));
-            }
-            /* Ansage-2 (C9): Geraet (leer = Standardgeraet), Lautstaerke (leer
-             * oder -1 = bleibt), Sprechtoken (leer = keins). Kein Wert erscheint
-             * in einer Beanstandung - das Token schon gar nicht. */
-            $ag = $has('alexa_geraet') ? trim((string) $v['alexa_geraet']) : '';
-            if (!isset($kaputt['alexa_geraet']) && !mo_alexa_geraet_ok($ag)) {
-                $falsch('alexa_geraet', sprintf(mo_t('TEXT.SICH_WERT'), mo_nennen_e('tts.alexa_geraet')));
-            }
-            $al = -1;
-            if ($has('alexa_laut')) {
-                $mo_als = trim((string) $v['alexa_laut']);
-                if ($mo_als !== '' && $mo_als !== '-1') { $al = $zahl('alexa_laut', -1, 0, 100); }
-            }
-            $at = '';
-            if ($has('alexa_token')) {
-                $at = (string) $v['alexa_token'];
-                if ($at !== '' && mo_nennform() === 'datei') {
-                    $falsch('alexa_token', mo_t('TEXT.SICH_ALEXA_TOKEN_DATEI'));
-                } elseif ($at !== '' && !mo_alexa_token_ok($at)) {
-                    $falsch('alexa_token', sprintf(mo_t('TEXT.SICH_WERT'), mo_nennen_e('tts.alexa_token')));
-                }
-            }
-            /* Ansage-3 (gs_ro): dieselben drei Felder fuer Chromecast 4 Lox NG,
-             * mit eigenem Sprechtoken; auch hier steht nie ein Wert in einer
-             * Beanstandung. Eine Datei mit Token wird abgewiesen. */
-            $gg = $has('google_geraet') ? trim((string) $v['google_geraet']) : '';
-            if (!isset($kaputt['google_geraet']) && !mo_alexa_geraet_ok($gg)) {
-                $falsch('google_geraet', sprintf(mo_t('TEXT.SICH_WERT'), mo_nennen_e('tts.google_geraet')));
-            }
-            $gl = -1;
-            if ($has('google_laut')) {
-                $mo_gls = trim((string) $v['google_laut']);
-                if ($mo_gls !== '' && $mo_gls !== '-1') { $gl = $zahl('google_laut', -1, 0, 100); }
-            }
-            $gt = '';
-            if ($has('google_token')) {
-                $gt = (string) $v['google_token'];
-                if ($gt !== '' && mo_nennform() === 'datei') {
-                    $falsch('google_token', mo_t('TEXT.SICH_GOOGLE_TOKEN_DATEI'));
-                } elseif ($gt !== '' && !mo_alexa_token_ok($gt)) {
-                    $falsch('google_token', sprintf(mo_t('TEXT.SICH_WERT'), mo_nennen_e('tts.google_token')));
-                }
+            foreach (ansage_sicherung_mangel($v) as $n) {
+                $liste[] = mo_mangel('', $n, mo_t($n === 'tts.google_token' ? 'TEXT.SICH_GOOGLE_TOKEN_DATEI' : 'TEXT.SICH_ALEXA_TOKEN_DATEI'));
             }
             if ($liste) { return array(null, $liste); }
-            return array(array(
-                'mode' => $mode, 'ip' => $ip, 'port' => $port, 'zones' => $zones, 'volume' => $volume,
-                'lang' => $lang, 'template' => $tpl,
-                'alexa_geraet' => $ag, 'alexa_laut' => $al, 'alexa_token' => $at,
-                'google_geraet' => $gg, 'google_laut' => $gl, 'google_token' => $gt), array());
+            $g = '';
+            $p = ansage_wert_pruefen($v, $g, mo_ansage_modi());
+            if ($p === null) {
+                $namen = ansage_sicherung_x3($v, mo_ansage_modi());
+                return array(null, array(mo_mangel('', $namen ? implode(', ', $namen) : $k,
+                    sprintf(mo_t('TEXT.SICH_TTS'), htmlspecialchars(ansage_kennung_text($g, mo_ansage_k()), ENT_QUOTES, 'UTF-8')))));
+            }
+            /* Robonect-eigen (C6, Nr. 19): leere Zonen beanstandet wie bis 1.1.17 (das Modul nimmt '' an
+             * und spraeche dann still in Zone 1). */
+            if (array_key_exists('zones', $p) && trim((string) $p['zones']) === '') {
+                return array(null, array(mo_mangel('', 'tts.zones', sprintf(mo_t('TEXT.SICH_LEER_FELD'), mo_nennen_e('tts.zones')))));
+            }
+            list($p) = ansage_vervollstaendigen($p, 'musicserver');
+            return array($p, array());
 
         case 'mqtt_topic':
             if (!mo_wert_taugt($v)) {
@@ -4876,19 +4548,11 @@ function mo_selbsttest($datei, array $reiter, $test_offen = false)
     $ep = mo_endpunkt_probe();
     $add('PRUEF.ENDPUNKT', (int) $ep['ok'], (string) $ep['text']);
 
-    /* --- Ansage-2 (Durchgang 01.10.2026): Antwortet Alexa-NG, passt das
-     * Sprechtoken? Nur, wenn Alexa-NG die Ausgabeart ist, und gefragt wird nur
-     * bei geoeffnetem Reiter Test (mo_pruef_alexang()). */
-    if (isset($cfg['tts']['mode']) && $cfg['tts']['mode'] === 'alexang') {
-        list($mo_as, $mo_at) = mo_pruef_alexang($cfg, $test_offen);
-        $add('PRUEF.ALEXA', $mo_as, $mo_at);
-    }
-    /* Ansage-3 (gs_ro): Antwortet Chromecast 4 Lox NG, passt das Sprechtoken?
-     * Ebenso nur bei der Ausgabeart Google und nur bei geoeffnetem Reiter Test. */
-    if (isset($cfg['tts']['mode']) && $cfg['tts']['mode'] === 'cc4lox') {
-        list($mo_gs, $mo_gtx) = mo_ng_pruef($cfg, $test_offen, 'google');
-        $add('PRUEF.GOOGLE', $mo_gs, $mo_gtx);
-    }
+    /* --- Nr. 36 b, Stufe 2 (1.1.18): EINE Zeile fuer die Sprachausgabe (ansage_pruefzeile()) -
+     * bis 1.1.17 je eine fuer Alexa-NG und fuer Google. Ein anderes Plugin wird nur bei
+     * geoeffnetem Reiter Test gefragt (selftest=1, spricht nicht), der Music Server nie. */
+    list($mo_as, $mo_at) = mo_pruef_ansage($cfg, $test_offen);
+    $add('PRUEF.ANSAGE', $mo_as, $mo_at);
 
     /* --- U6 (Durchgang 01.10.2026, Regeln/04, BatterieBMS 0.9.17): zuerst der
      * Schalter DIESES Plugins, dann das Gateway. Gemessen bis 1.1.14: bei
