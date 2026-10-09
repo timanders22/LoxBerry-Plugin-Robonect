@@ -12,6 +12,23 @@ Zugangsdaten lokal (Dateirechte 0600, HTTP-Basic-Auth) — Loxone ruft nur noch
 
 Kompatibel mit LoxBerry 3.x und **LoxBerry 4** (reines PHP, PHP 7.4 und 8.x).
 
+## Neu in 1.1.20
+
+Baustein-Liste in der Schreibweise des Leitungswerkzeugs, gemeinsame Sprachausgabe 1.1.2.
+
+* **Baustein-Liste (Reiter Einbindung in Loxone):** Die Spalte „Eingänge verbinden mit“ nennt die
+  Quellen in fester Form: `Ausgang von MOWER_BATT (#2)` statt „Eingang = #2 (MOWER_BATT)“,
+  `Ausgang von #17`, am Statusbaustein `V1 = …`. Was aus der eigenen Anlage kommt (Regensensor,
+  Zeitschaltuhr, Ferien-Plugin), bleibt in Worten. Gleiche Bausteine, gleiche Verbindungen.
+* **Sprachausgabe: richtige Werksart.** Ab Werk spricht das Plugin über den Loxone Music Server; die
+  Seite sagte bisher „Ab Werk aus“ und „aus (ab Werk)“. Jetzt steht dort der Music Server mit
+  „(ab Werk)“ und dem Hinweis, dass erst gesprochen wird, wenn die Angaben eingetragen sind.
+* **Sprachausgabe 1.1.2:** gemeinsames Modul und Abschnitt [ANSAGE] mit 157 Sätzen. Den Satz zu einem
+  unbekannten Eintrag im Block der Sprachausgabe bringt jetzt das Modul mit; die eigene Umlenkung ist
+  gestrichen (gleicher Wortlaut). Dazu aus dem Modul: Zeichenzahl bei kaputtem UTF-8 in Zeichen, die
+  Meldung „Port abgewiesen“ nennt das Feld nicht mehr doppelt.
+* Gerendert unter PHP 7.4, 8.4 und 8.5, nicht am Gerät angesehen.
+
 ## Neu in 1.1.19
 
 Kopf wie alle Hausplugins: Statusübersicht über den Reitern, Zusammenfassung oben im ersten Reiter.

@@ -2953,8 +2953,9 @@ function mo_ansage_opt()
 /**
  * Kontext der gemeinsamen Sprachausgabe: Webport, Kopfzeile, Ordner fuer <art>_letzte.json (der
  * Zwischenordner - dort lagen schon alexa_letzte.json und google_letzte.json, gleiche Form), Texte
- * aus [ANSAGE]. Zur Kennung TTS_EINTRAG (unbekannter Eintrag im Block tts) hat auch Modul 1.1.1
- * keinen Satz; die Linie nennt ihren eigenen (wie Intercom und Raumklima).
+ * aus [ANSAGE]. Den Satz zur Kennung TTS_EINTRAG bringt das Modul seit 1.1.2 selbst mit; die
+ * eigene Umlenkung (TEXT.SICH_TTS_EINTRAG) ist seit 1.1.20 gestrichen. 'werk': die Werksart
+ * dieser Linie ist der Music Server (mo_config()) - ohne den Eintrag sagte die Seite "Ab Werk aus".
  */
 function mo_ansage_k()
 {
@@ -2963,7 +2964,7 @@ function mo_ansage_k()
         'kopf'   => array('User-Agent: LoxBerry Robonect'),
         'ordner' => mo_tmpdir(),
         't'      => function ($s) { return mo_t($s); },
-        'schluessel' => array('K_TTS_EINTRAG' => 'TEXT.SICH_TTS_EINTRAG'),
+        'werk'   => 'musicserver',
     );
 }
 
