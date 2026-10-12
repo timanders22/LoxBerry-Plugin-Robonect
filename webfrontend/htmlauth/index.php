@@ -1240,9 +1240,16 @@ foreach ($mw_befehle as $mw_b => $mw_bt) { ?>
          ein Name als array(wert) steht woertlich da (Wert aus dem Code).
          Welle Bild 8 (1.1.21, Entscheidung A): die Liste ist die im LoxBerry-Plugins
          Musterprojekt in Loxone Config gebaute und mit leitungen_setzen.py verbundene
-         (Musterprojekt/baustein_listen.txt, Abschnitt Robonect) - eine Zeile = ein
-         Baustein, nur die Hauptvariante, fuer Maeher 1 wie die Vorlagen-Knoepfe ohne
-         Auswahl. Namen #1 bis #7 und #19 aus den Vorlagen, nicht abgeschrieben. */
+         - eine Zeile = ein Baustein, fuer Maeher 1 wie die Vorlagen-Knoepfe ohne Auswahl.
+         Welle Bild 10 VOLL (1.1.22, Hausherr 11.10.2026: Vollausstattung, ein Laie soll
+         das Maximum leicht uebernehmen koennen): ZWEI Seiten aus
+         Musterprojekt/baustein_listen.txt, Abschnitte "Robonect" (42 Zeilen, Kennungen
+         B1..B42) und "Robonect Steuerung" (34 Zeilen, S1..S34); je Seite Ueberschrift,
+         Kasten "So uebernehmen Sie diese Seite", Tabelle, Hinweise, Bild, Link. {Bn}/{Sn}
+         -> "#n" der eigenen Seite. Weitere Platzhalter: {T:VI_DATEI}/{T:VO_DATEI}
+         Dateiname der Vorlage, {C:FELD} Befehlserkennung aus mo_check(),
+         {L:ABSCHNITT.SCHLUESSEL} Beschriftung der Oberflaeche (Knopf, Haken, Reiter).
+         Namen der Vorlagen-Zeilen aus den Vorlagen, nicht abgeschrieben. */
 $mw_bs_lesen = function ($xml) {
     $w = function ($el, $attr) {
         return preg_match('/\s' . $attr . '="([^"]*)"/', $el, $m)
@@ -1262,13 +1269,20 @@ $mw_bs_lesen = function ($xml) {
 };
 $mw_bs_xml = mo_vorlage(1);
 $mw_bs_vi = $mw_bs_lesen($mw_bs_xml[1]);
+$mw_bs_vi['datei'] = $mw_bs_xml[0];
 $mw_bs_xml = mo_vo_vorlage(1);
 $mw_bs_vo = $mw_bs_lesen($mw_bs_xml[1]);
+$mw_bs_vo['datei'] = $mw_bs_xml[0];
 $mw_bs_titel = array();
 foreach ($mw_bs_vi['befehle'] as $mw_bs_b) {
     if (preg_match('/;([A-Z0-9_]+)=/', $mw_bs_b['check'], $mw_bs_m)) {
         $mw_bs_titel['F:' . $mw_bs_m[1]] = $mw_bs_b['titel'];
     }
+}
+/* Die vier Statistikfelder stehen nur mit dem Haken "Einsaetze und Maehdauer mitzaehlen" in der
+ * Vorlage; ohne ihn kommt der Titel aus mo_vi_titel() - der Stelle, aus der mo_vorlage() ihn bildet. */
+foreach (array('EINSHEUTE', 'MINHEUTE', 'EINSWOCHE', 'MINWOCHE') as $mw_bs_sf) {
+    if (!isset($mw_bs_titel['F:' . $mw_bs_sf])) { $mw_bs_titel['F:' . $mw_bs_sf] = mo_vi_titel($mw_bs_sf, 1); }
 }
 foreach ($mw_bs_vo['befehle'] as $mw_bs_b) {
     if (preg_match('/[?&]cmd=([^&]+)/', $mw_bs_b['ein'], $mw_bs_m)) {
@@ -1277,6 +1291,8 @@ foreach ($mw_bs_vo['befehle'] as $mw_bs_b) {
 }
 $mw_bs_titel['T:VI'] = $mw_bs_vi['titel'];
 $mw_bs_titel['T:VO'] = $mw_bs_vo['titel'];
+$mw_bs_titel['T:VI_DATEI'] = $mw_bs_vi['datei'];
+$mw_bs_titel['T:VO_DATEI'] = $mw_bs_vo['datei'];
 $mw_bs_mono = function ($s) { return '<span class="sm-mono">' . mw_e($s) . '</span>'; };
 $mw_bs_f = function ($feld) use ($mw_bs_titel) {
     return isset($mw_bs_titel['F:' . $feld]) ? $mw_bs_titel['F:' . $feld] : '{F:' . $feld . '}';
@@ -1284,60 +1300,149 @@ $mw_bs_f = function ($feld) use ($mw_bs_titel) {
 $mw_bs_a = function ($cmd) use ($mw_bs_titel) {
     return isset($mw_bs_titel['A:' . $cmd]) ? $mw_bs_titel['A:' . $cmd] : '{A:' . $cmd . '}';
 };
-$mw_bs = array(
-    array('B1', 'T_VI_BEFEHL', array($mw_bs_f('CODE')), 'B1_PARAM', array(), 'V_KEINE'),
-    array('B2', 'T_VI_BEFEHL', array($mw_bs_f('BATT')), 'B2_PARAM', array(), 'V_KEINE'),
-    array('B3', 'T_VI_BEFEHL', array($mw_bs_f('FEHLER')), 'B3_PARAM', array(), 'V_KEINE'),
-    array('B4', 'T_VI_BEFEHL', array($mw_bs_f('ANN')), 'B4_PARAM', array(), 'V_KEINE'),
-    array('B5', 'T_VI_BEFEHL', array($mw_bs_f('PUSH')), 'B5_PARAM', array(), 'V_KEINE'),
-    array('B6', 'T_VI_BEFEHL', array($mw_bs_f('OK')), 'B6_PARAM', array(), 'V_KEINE'),
-    array('B7', 'T_VI_BEFEHL', array($mw_bs_f('ZAEHLER')), 'B7_PARAM', array(), 'V_KEINE'),
-    array('B8', 'T_KONST', 'B8_NAME', 'B8_PARAM', array(), 'V_KEINE'),
-    array('B9', 'T_STATUS', 'B9_NAME', 'B9_PARAM', array(), 'B9_VERB'),
-    array('B10', 'T_UND', 'B10_NAME', 'P_KEINE', array(), 'B10_VERB'),
-    array('B11', 'T_BENACH', 'B11_NAME', 'P_FREI', array(), 'B11_VERB'),
-    array('B12', 'T_NICHT', 'B12_NAME', 'P_KEINE', array(), 'B12_VERB'),
-    array('B13', 'T_AWV', 'B13_NAME', 'B13_PARAM', array(), 'B13_VERB'),
-    array('B14', 'T_ODER', 'B14_NAME', 'P_KEINE', array(), 'B14_VERB'),
-    array('B15', 'T_ODER', 'B15_NAME', 'P_KEINE', array(), 'B15_VERB'),
-    array('B16', 'T_EINVERZ', 'B16_NAME', 'B16_PARAM', array(), 'B16_VERB'),
-    array('B17', 'T_BENACH', 'B17_NAME', 'P_FREI', array(), 'B17_VERB'),
-    array('B18', 'T_TASTER', 'B18_NAME', 'B18_PARAM', array(), 'V_KEINE'),
-    array('B19', 'T_VO_EIN', array($mw_bs_a('home')), 'P_KEINE', array(), 'B19_VERB'),
+$mw_bs_seiten = array(
+    array(
+        'titel'    => mo_t('BAUSTEIN.UE_WERTE'),
+        'seite'    => 'Robonect',
+        'bild'     => 'einbindung_loxone_werte.png',
+        'schritte' => array('A_S1', 'A_S2', 'A_S3', 'A_S4', 'A_S5', 'A_S6', 'A_S7', 'A_S8', 'A_S9'),
+        'hinweise' => array('H_AWV', 'H_ODER', 'H_PUSH', 'H_HEIM', 'H_MESSER', 'H_DOPPELT', 'H_ANZEIGE', 'ERLAEUTERUNG'),
+        'zeilen'   => array(
+            array('B1', 'T_VI_BEFEHL', array($mw_bs_f('CODE')), 'B1_PARAM', array(), 'V_KEINE'),
+            array('B2', 'T_VI_BEFEHL', array($mw_bs_f('BATT')), 'B2_PARAM', array(), 'V_KEINE'),
+            array('B3', 'T_VI_BEFEHL', array($mw_bs_f('FEHLER')), 'B3_PARAM', array(), 'V_KEINE'),
+            array('B4', 'T_VI_BEFEHL', array($mw_bs_f('ANN')), 'B4_PARAM', array(), 'V_KEINE'),
+            array('B5', 'T_VI_BEFEHL', array($mw_bs_f('PUSH')), 'B5_PARAM', array(), 'V_KEINE'),
+            array('B6', 'T_VI_BEFEHL', array($mw_bs_f('OK')), 'B6_PARAM', array(), 'V_KEINE'),
+            array('B7', 'T_VI_BEFEHL', array($mw_bs_f('ZAEHLER')), 'B7_PARAM', array(), 'V_KEINE'),
+            array('B8', 'T_KONST', 'B8_NAME', 'B8_PARAM', array(), 'V_KEINE'),
+            array('B9', 'T_STATUS', 'B9_NAME', 'B9_PARAM', array(), 'B9_VERB'),
+            array('B10', 'T_UND', 'B10_NAME', 'P_KEINE', array(), 'B10_VERB'),
+            array('B11', 'T_BENACH', 'B11_NAME', 'P_FREI', array(), 'B11_VERB'),
+            array('B12', 'T_NICHT', 'B12_NAME', 'P_KEINE', array(), 'B12_VERB'),
+            array('B13', 'T_AWV', 'B13_NAME', 'B13_PARAM', array(), 'B13_VERB'),
+            array('B14', 'T_ODER', 'B14_NAME', 'P_KEINE', array(), 'B14_VERB'),
+            array('B15', 'T_ODER', 'B15_NAME', 'P_KEINE', array(), 'B15_VERB'),
+            array('B16', 'T_EINVERZ', 'B16_NAME', 'B16_PARAM', array(), 'B16_VERB'),
+            array('B17', 'T_BENACH', 'B17_NAME', 'P_FREI', array(), 'B17_VERB'),
+            array('B18', 'T_TASTER', 'B18_NAME', 'P_APP', array(), 'V_KEINE'),
+            array('B19', 'T_VO_EIN', array($mw_bs_a('home')), 'P_KEINE', array(), 'B19_VERB'),
+            array('B20', 'T_VI_BEFEHL', array($mw_bs_f('MAEHT')), 'B20_PARAM', array(), 'V_KEINE'),
+            array('B21', 'T_VI_BEFEHL', array($mw_bs_f('STUNDEN')), 'B21_PARAM', array(), 'V_KEINE'),
+            array('B22', 'T_VI_BEFEHL', array($mw_bs_f('MESSER')), 'B22_PARAM', array(), 'V_KEINE'),
+            array('B23', 'T_VI_BEFEHL', array($mw_bs_f('MESSERWARN')), 'B23_PARAM', array(), 'V_KEINE'),
+            array('B24', 'T_STATUS', 'B24_NAME', 'B24_PARAM', array(), 'B24_VERB'),
+            array('B25', 'T_BENACH', 'B25_NAME', 'B25_PARAM', array(), 'B25_VERB'),
+            array('B26', 'T_TASTER', 'B26_NAME', 'B26_PARAM', array(), 'V_KEINE'),
+            array('B27', 'T_VO_EIN', array($mw_bs_a('blade_reset')), 'B27_PARAM', array(), 'B27_VERB'),
+            array('B28', 'T_VI_BEFEHL', array($mw_bs_f('TEMP')), 'B28_PARAM', array(), 'V_KEINE'),
+            array('B29', 'T_VI_BEFEHL', array($mw_bs_f('FEUCHTE')), 'B29_PARAM', array(), 'V_KEINE'),
+            array('B30', 'T_VI_BEFEHL', array($mw_bs_f('WLAN')), 'B30_PARAM', array(), 'V_KEINE'),
+            array('B31', 'T_STATUS', 'B31_NAME', 'B31_PARAM', array(), 'B31_VERB'),
+            array('B32', 'T_VI_BEFEHL', array($mw_bs_f('FEHLERALTER')), 'B32_PARAM', array(), 'V_KEINE'),
+            array('B33', 'T_STATUS', 'B33_NAME', 'B33_PARAM', array(), 'B33_VERB'),
+            array('B34', 'T_GLEICH', 'B34_NAME', 'B34_PARAM', array(), 'B34_VERB'),
+            array('B35', 'T_BENACH', 'B35_NAME', 'B35_PARAM', array(), 'B35_VERB'),
+            array('B36', 'T_SCHWELL', 'B36_NAME', 'B36_PARAM', array(), 'B36_VERB'),
+            array('B37', 'T_UND', 'B37_NAME', 'B37_PARAM', array(), 'B37_VERB'),
+            array('B38', 'T_BENACH', 'B38_NAME', 'B38_PARAM', array(), 'B38_VERB'),
+            array('B39', 'T_VI_BEFEHL', array($mw_bs_f('PTEST')), 'B39_PARAM', array(), 'V_KEINE'),
+            array('B40', 'T_BENACH', 'B40_NAME', 'B40_PARAM', array(), 'B40_VERB'),
+            array('B41', 'T_VI_BEFEHL', array($mw_bs_f('AUDIO')), 'B41_PARAM', array(), 'V_KEINE'),
+            array('B42', 'T_STATUS', 'B42_NAME', 'B42_PARAM', array(), 'B42_VERB'),
+        ),
+    ),
+    array(
+        'titel'    => mo_t('BAUSTEIN.UE_STEUERUNG'),
+        'seite'    => 'Robonect Steuerung',
+        'bild'     => 'einbindung_loxone_steuerung.png',
+        'schritte' => array('B_S1', 'B_S2', 'B_S3', 'B_S4', 'B_S5', 'B_S6', 'B_S7'),
+        'hinweise' => array('H_SPERREN', 'H_WINTER', 'H_ZEITEN', 'H_ANHALTEN', 'H_STATISTIK', 'H_TOKEN'),
+        'zeilen'   => array(
+            array('S1', 'T_VI_BEFEHL', array($mw_bs_f('MODUS')), 'S1_PARAM', array(), 'V_KEINE'),
+            array('S2', 'T_VI_BEFEHL', array($mw_bs_f('TIMER')), 'S2_PARAM', array(), 'V_KEINE'),
+            array('S3', 'T_STATUS', 'S3_NAME', 'S3_PARAM', array(), 'S3_VERB'),
+            array('S4', 'T_VI_BEFEHL', array($mw_bs_f('MAEHT')), 'S4_PARAM', array(), 'V_KEINE'),
+            array('S5', 'T_VI_BEFEHL', array($mw_bs_f('LAEDT')), 'S5_PARAM', array(), 'V_KEINE'),
+            array('S6', 'T_VI_BEFEHL', array($mw_bs_f('DAUER')), 'S6_PARAM', array(), 'V_KEINE'),
+            array('S7', 'T_STATUS', 'S7_NAME', 'S7_PARAM', array(), 'S7_VERB'),
+            array('S8', 'T_VI_BEFEHL', array($mw_bs_f('EINSHEUTE')), 'S8_PARAM', array(), 'V_KEINE'),
+            array('S9', 'T_VI_BEFEHL', array($mw_bs_f('MINHEUTE')), 'S9_PARAM', array(), 'V_KEINE'),
+            array('S10', 'T_VI_BEFEHL', array($mw_bs_f('EINSWOCHE')), 'S10_PARAM', array(), 'V_KEINE'),
+            array('S11', 'T_VI_BEFEHL', array($mw_bs_f('MINWOCHE')), 'S11_PARAM', array(), 'V_KEINE'),
+            array('S12', 'T_STATUS', 'S12_NAME', 'S12_PARAM', array(), 'S12_VERB'),
+            array('S13', 'T_TASTER', 'S13_NAME', 'P_APP', array(), 'V_KEINE'),
+            array('S14', 'T_VO_EIN', array($mw_bs_a('start')), 'P_KEINE', array(), 'S14_VERB'),
+            array('S15', 'T_TASTER', 'S15_NAME', 'S15_PARAM', array(), 'V_KEINE'),
+            array('S16', 'T_VO_EIN', array($mw_bs_a('stop')), 'P_KEINE', array(), 'S16_VERB'),
+            array('S17', 'T_TASTER', 'S17_NAME', 'P_APP', array(), 'V_KEINE'),
+            array('S18', 'T_VO_EIN', array($mw_bs_a('man')), 'P_KEINE', array(), 'S18_VERB'),
+            array('S19', 'T_SCHALTER', 'S19_NAME', 'S19_PARAM', array(), 'V_KEINE'),
+            array('S20', 'T_AUSVERZ', 'S20_NAME', 'S20_PARAM', array(), 'S20_VERB'),
+            array('S21', 'T_SCHALTUHR', 'S21_NAME', 'S21_PARAM', array(), 'V_KEINE'),
+            array('S22', 'T_SCHALTER', 'S22_NAME', 'S22_PARAM', array(), 'V_KEINE'),
+            array('S23', 'T_ODER', 'S23_NAME', 'P_KEINE', array(), 'S23_VERB'),
+            array('S24', 'T_SCHALTER', 'S24_NAME', 'S24_PARAM', array(), 'V_KEINE'),
+            array('S25', 'T_UND', 'S25_NAME', 'P_KEINE', array(), 'S25_VERB'),
+            array('S26', 'T_FLANKE', 'S26_NAME', 'S26_PARAM', array(), 'S26_VERB'),
+            array('S27', 'T_TASTER', 'S27_NAME', 'S27_PARAM', array(), 'V_KEINE'),
+            array('S28', 'T_ODER', 'S28_NAME', 'S28_PARAM', array(), 'S28_VERB'),
+            array('S29', 'T_VO_EIN', array($mw_bs_a('eod')), 'P_KEINE', array(), 'S29_VERB'),
+            array('S30', 'T_TASTER', 'S30_NAME', 'S30_PARAM', array(), 'V_KEINE'),
+            array('S31', 'T_ODER', 'S31_NAME', 'S31_PARAM', array(), 'S31_VERB'),
+            array('S32', 'T_VO_EIN', array($mw_bs_a('auto')), 'P_KEINE', array(), 'S32_VERB'),
+            array('S33', 'T_STATUS', 'S33_NAME', 'S33_PARAM', array(), 'S33_VERB'),
+            array('S34', 'T_ODER', 'S34_NAME', 'S34_PARAM', array(), 'S34_VERB'),
+        ),
+    ),
 );
 $mw_bs_nr = array();
-foreach ($mw_bs as $mw_bs_i => $mw_bs_z) { $mw_bs_nr[$mw_bs_z[0]] = $mw_bs_i + 1; }
+foreach ($mw_bs_seiten as $mw_bs_s) {
+    foreach ($mw_bs_s['zeilen'] as $mw_bs_i => $mw_bs_z) { $mw_bs_nr[$mw_bs_z[0]] = $mw_bs_i + 1; }
+}
 /* Erst vsprintf auf den Sprachtext, dann die Platzhalter: die eingesetzten
  * Titel und Adressen kommen so nie durch vsprintf. */
 $mw_bs_t = function ($schluessel, $argumente = array()) use ($mw_bs_nr, $mw_bs_titel, $mw_bs_mono) {
     $s = (string) mo_t('BAUSTEIN.' . $schluessel);
     if ($argumente) { $s = vsprintf($s, $argumente); }
-    return preg_replace_callback('/\{(B\d+|[FAT]:[A-Za-z0-9_]+)\}/', function ($m) use ($mw_bs_nr, $mw_bs_titel, $mw_bs_mono) {
+    return preg_replace_callback('/\{([BS]\d+|[FATC]:[A-Za-z0-9_]+|L:[A-Z]+\.[A-Z0-9_]+)\}/', function ($m) use ($mw_bs_nr, $mw_bs_titel, $mw_bs_mono) {
         if (isset($mw_bs_nr[$m[1]])) { return '#' . $mw_bs_nr[$m[1]]; }
         if (strncmp($m[1], 'T:', 2) === 0 && isset($mw_bs_titel[$m[1]])) { return mw_e($mw_bs_titel[$m[1]]); }
+        if (strncmp($m[1], 'C:', 2) === 0) { return $mw_bs_mono(mo_check(substr($m[1], 2))); }
+        if (strncmp($m[1], 'L:', 2) === 0) { return mw_e(mo_t(substr($m[1], 2))); }
         return isset($mw_bs_titel[$m[1]]) ? $mw_bs_mono($mw_bs_titel[$m[1]]) : $m[0];
     }, $s);
 }; ?>
 <?php echo $mw_bs_t('TEXT'); ?>
+<?php foreach ($mw_bs_seiten as $mw_bs_s) { ?>
+<h3><?php echo mw_e($mw_bs_s['titel']); ?></h3>
+<div class="sm-hinweis"><b><?php echo mw_e(mo_t('BAUSTEIN.SO_TITEL')); ?></b>
+<ol>
+<?php foreach ($mw_bs_s['schritte'] as $mw_bs_k) { ?>
+<li><?php echo $mw_bs_t($mw_bs_k); ?></li>
+<?php } ?>
+</ol>
+</div>
 <div class="sm-breit">
 <table class="sm-tbl">
 <tr><th>#</th><th><?php echo mw_e(mo_t('BAUSTEIN.T_TYP')); ?></th><th><?php echo mw_e(mo_t('BAUSTEIN.T_NAME')); ?></th><th><?php echo mw_e(mo_t('BAUSTEIN.T_PARAM')); ?></th><th><?php echo mw_e(mo_t('BAUSTEIN.T_VERB')); ?></th></tr>
-<?php foreach ($mw_bs as $mw_bs_i => $mw_bs_z) { ?>
+<?php foreach ($mw_bs_s['zeilen'] as $mw_bs_i => $mw_bs_z) { ?>
 <tr><td><?php echo $mw_bs_i + 1; ?></td><td><?php echo $mw_bs_t($mw_bs_z[1]); ?></td><td><span class="sm-mono"><?php echo is_array($mw_bs_z[2]) ? mw_e($mw_bs_z[2][0]) : $mw_bs_t($mw_bs_z[2]); ?></span></td><td><?php echo $mw_bs_t($mw_bs_z[3], $mw_bs_z[4]); ?></td><td><?php echo $mw_bs_t($mw_bs_z[5]); ?></td></tr>
 <?php } ?>
 </table>
 </div>
-<div class="sm-hilfe"><?php echo $mw_bs_t('H_AWV'); ?><br>
-<?php echo $mw_bs_t('H_ODER'); ?><br>
-<?php echo $mw_bs_t('H_PUSH'); ?><br>
-<?php echo $mw_bs_t('H_HEIM'); ?><br>
-<?php echo $mw_bs_t('H_SPERREN'); ?><br>
-<?php echo $mw_bs_t('ERLAEUTERUNG'); ?></div>
+<p class="sm-hilfe"><b><?php echo mw_e(mo_t('BAUSTEIN.H_TITEL')); ?></b></p>
+<ul class="sm-hilfe">
+<?php foreach ($mw_bs_s['hinweise'] as $mw_bs_k) { ?>
+<li><?php echo $mw_bs_t($mw_bs_k); ?></li>
+<?php } ?>
+</ul>
 <figure class="sm-bild">
-<img src="einbindung_loxone.png" alt="<?php echo mw_e(mo_t('TEXT.BILD_ALT')); ?>" loading="lazy">
-<figcaption><?php echo mw_e(mo_t('TEXT.BILD_UNTERSCHRIFT')); ?></figcaption>
+<img src="<?php echo mw_e($mw_bs_s['bild']); ?>" alt="<?php echo mw_e(sprintf(mo_t('TEXT.BILD_ALT'), $mw_bs_s['titel'])); ?>" loading="lazy">
+<figcaption><?php echo mw_e(sprintf(mo_t('TEXT.BILD_UNTERSCHRIFT'), $mw_bs_s['seite'])); ?></figcaption>
 </figure>
 <div class="sm-small"><?php echo mo_t('TEXT.MUSTERPROJEKT'); ?></div>
+<?php } ?>
 </div>
 
 <div class="sm-step"><b><?php echo mw_e(mo_t('TEXT.SCHRITT_7_GEGENPROBE')); ?></b><br>

@@ -12,9 +12,15 @@ Zugangsdaten lokal (Dateirechte 0600, HTTP-Basic-Auth) — Loxone ruft nur noch
 
 Kompatibel mit LoxBerry 3.x und **LoxBerry 4** (reines PHP, PHP 7.4 und 8.x).
 
-Die Bausteine der Baustein-Liste aus dem Reiter *Einbindung in Loxone* stehen fertig verbunden auf
-der Seite „Robonect“ im [LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt),
+Die Bausteine der beiden Baustein-Listen aus dem Reiter *Einbindung in Loxone* stehen fertig verbunden
+auf den Seiten „Robonect“ und „Robonect Steuerung“ im [LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt),
 einer gemeinsamen Projektdatei mit allen Plugin-Seiten und Vorlagen.
+
+## Neu in 1.1.22
+
+Reiter „Einbindung in Loxone“: Vollausstattung aus dem LoxBerry-Plugins Musterprojekt mit zwei Bildern
+und Schritt-für-Schritt-Anleitung – „Werte, Meldungen und Messer“ (42 Zeilen) und „Steuerung, Regen- und
+Ruhezeit-Sperre“ (34 Zeilen) statt einer Liste mit 19 Zeilen.
 
 ## Neu in 1.1.21
 
@@ -844,8 +850,8 @@ liefern in beiden Sprachen zeichengleiche Ausgabe ohne eine Meldung.
   Protokoll nennen HTTP-Code und `GRUND`; vom Ansagetext steht nur die Länge im
   Protokoll
 - Bis zu **neun Mäher**, MQTT, JSON, Protokoll (Passwörter werden maskiert)
-- Reiter: Einstellungen, Einbindung in Loxone (mit Baustein-Liste und Bild aus dem
-  LoxBerry-Plugins Musterprojekt), Test, Protokoll
+- Reiter: Einstellungen, Einbindung in Loxone (mit zwei Baustein-Listen, Bildern und
+  Schritt-für-Schritt-Anleitung aus dem LoxBerry-Plugins Musterprojekt), Test, Protokoll
 
 ## Endpunkte
 

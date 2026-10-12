@@ -3469,6 +3469,15 @@ function mo_abo_text() {
  */
 function mo_polling() { return 60; }
 
+/** Titel eines Eingangsbefehls der Vorlage "Rasenmaeher": MOWER_<FELD>, ab Maeher 2 mit _<n>.
+ *  Welle Bild 10 VOLL (1.1.22): EINE Stelle fuer mo_vorlage() und die Baustein-Listen im Reiter
+ *  "Einbindung in Loxone" - die vier Statistikfelder stehen nur mit dem Haken "Einsaetze und
+ *  Maehdauer mitzaehlen" in der Vorlage, die Liste nennt sie trotzdem. Bis 1.1.21 setzte
+ *  mo_vorlage() den Titel selbst zusammen (gleiche Form). */
+function mo_vi_titel($feld, $dev = 1) {
+    return 'MOWER_' . $feld . ((int) $dev > 1 ? '_' . (int) $dev : '');
+}
+
 /** Vorlage fuer den Import in Loxone Config. Rueckgabe: array(name, inhalt) */
 function mo_vorlage($dev = 1) {
     $host = isset($_SERVER['HTTP_HOST']) && $_SERVER['HTTP_HOST'] !== ''
@@ -3480,7 +3489,7 @@ function mo_vorlage($dev = 1) {
     foreach (mo_felder() as $name => $f) {
         list($analog, $min, $max, $einheit, $text) = $f;
         $cmds[] = array(
-            'title' => 'MOWER_' . $name . ($dev > 1 ? '_' . $dev : ''),
+            'title' => mo_vi_titel($name, $dev),
             'comment' => $text . ($einheit !== '' ? ' [' . $einheit . ']' : ''),
             'check' => mo_check($name),
             'unit' => ($einheit !== '' ? '<v.1> ' . $einheit : '<v.1>'),
