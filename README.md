@@ -16,6 +16,12 @@ Die Bausteine der beiden Baustein-Listen aus dem Reiter *Einbindung in Loxone* s
 auf den Seiten „Robonect“ und „Robonect Steuerung“ im [LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt),
 einer gemeinsamen Projektdatei mit allen Plugin-Seiten und Vorlagen.
 
+## Neu in 1.1.23
+
+Einbindung in Loxone: Eingang En der Analogwertvalidierung nicht negieren (Hinweis und Bild);
+ohne diese Korrektur löste die Ausfallmeldung nie aus. Wer die Seite schon gebaut hat: Haken bei
+‚En‘ entfernen.
+
 ## Neu in 1.1.22
 
 Reiter „Einbindung in Loxone“: Vollausstattung aus dem LoxBerry-Plugins Musterprojekt mit zwei Bildern
