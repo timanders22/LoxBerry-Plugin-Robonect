@@ -72,6 +72,16 @@ case "$(cat "$MARKE" 2>/dev/null)" in
         ;;
 esac
 
+# ---------- Gruppe 2 / MQTT (1.1.24): die Befehlsbruecke anhalten ----------
+# Erst jetzt, da die Upgrade-Marke liegt: der Waechter im Minutenlauf startet sie dann nicht neu, und
+# befehlsbruecke.sh start lehnt waehrend der Marke ab (Brueckenbericht Abschnitt 6). stop beendet Dienst und
+# mosquitto_sub und zaehlt argumentweise nach. Bis 1.1.23 hatte die Linie keinen Dauerdienst - beim Update von
+# dort fehlt die Datei, und es geschieht nichts.
+BBSH="$BASE/bin/plugins/$PFOLDER/befehlsbruecke.sh"
+if [ -f "$BBSH" ]; then
+    timeout 40 bash "$BBSH" stop 2>&1 | sed 's/^/<INFO> /'
+fi
+
 # Der Arbeitsordner des Installers steht im SECHSTEN Argument. $1 ist eine
 # zehnstellige Zufallskennung, kein Pfad; dass "mkdir -p $1" bisher aufging,
 # lag allein daran, dass der Installer die Hakenskripte mit cd "$tempfolder"

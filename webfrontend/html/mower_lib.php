@@ -236,8 +236,15 @@ function mo_vorgaben()
      * Einstellung" abgewiesen wuerde. */
     'blade_hours' => 200,         // Messerwechsel-Intervall in Betriebsstunden
     'blade_base' => 0,            // Betriebsstunden beim letzten Messerwechsel
-    'mqtt_enabled' => 0,
+    /* Gruppe 2 / MQTT (1.1.24, Entwurf rb E1): MQTT ab Werk AN - das LoxBerry-Plugins Musterprojekt holt Werte
+     * und Befehle ueber MQTT. Gilt nur fuer neue Installationen: eine bestehende Konfiguration traegt den
+     * Schluessel und behaelt ihren Wert (mo_cfg_vervollstaendigen() ergaenzt nur Fehlendes). */
+    'mqtt_enabled' => 1,
     'mqtt_topic' => 'maeher',
+    /* Befehlsbruecke (bin/befehlsbruecke.php, Entwurf rb E11): beide Haken ab Werk aus. Eine Sicherung bis 1.1.23
+     * kennt sie nicht - mo_spaet_schluessel(). */
+    'befehle_mqtt_ein' => 0,      // Befehle ueber MQTT annehmen
+    'befehle_mqtt_steuern' => 0,  // zweiter Haken: Fahrbefehle (starten, anhalten, Betriebsarten)
     'notify' => array(),
     'tts' => array(),
     'aktionstoken' => '',          // schuetzt ?cmd= (unangemeldeter Endpunkt)
@@ -1177,10 +1184,13 @@ function mo_state($dev = 1, $force = false, $stumm_beachten = true) {
      * MinVal-Angaben in mo_felder() sind mitgezogen - ein Fehlwert, den die
      * Vorlage abschneidet, wird zu einem falschen Messwert. */
     $st = array('ok' => 0, 'name' => $m ? $m['name'] : '-', 'code' => -1, 'text' => 'keine Verbindung',
-                'modus' => -1, 'modus_text' => '-', 'batterie' => -1, 'laedt' => 0,
-                'fehler' => 0, 'fehlertext' => '', 'stunden' => 0, 'dauer' => 0,
-                'messer_rest' => -1, 'messer_warn' => 0, 'temperatur' => -999, 'feuchte' => -1,
-                'wlan' => -999, 'timer' => 0, 'maeht' => 0, 'ts' => time(),
+                /* Gruppe 2 / MQTT (1.1.24, Entwurf rb E2, -1-Regel ueber HTTP UND MQTT): auch stunden,
+                 * dauer, timer, maeht, laedt und messer_warn sind ohne Messung -1 ("nicht bekannt") statt
+                 * einer erfundenen 0 - 0 hiesse "maeht nicht", "kein Timer", "kein Messerwechsel". */
+                'modus' => -1, 'modus_text' => '-', 'batterie' => -1, 'laedt' => -1,
+                'fehler' => 0, 'fehlertext' => '', 'stunden' => -1, 'dauer' => -1,
+                'messer_rest' => -1, 'messer_warn' => -1, 'temperatur' => -999, 'feuchte' => -1,
+                'wlan' => -999, 'timer' => -1, 'maeht' => -1, 'ts' => time(),
                 /* Warum das Nichterreichen einen GRUND braucht (D4, 26.08.2026):
                  * bis 1.0.13 sah ein falsches Passwort genauso aus wie ein
                  * totes Geraet - beide Male stand hier "keine Verbindung",
@@ -1212,12 +1222,15 @@ function mo_state($dev = 1, $force = false, $stumm_beachten = true) {
         $st['code'] = (int) mo_zahl_aus($s, 'status', -1, $mo_fehlt);
         $st['text'] = mo_status_text($st['code']);
         $st['batterie'] = (int) mo_zahl_aus($s, 'battery', -1, $mo_fehlt);
-        $st['stunden'] = (int) mo_zahl_aus($s, 'hours', 0, $mo_fehlt);
-        $st['dauer'] = (int) round(((int) mo_zahl_aus($s, 'duration', 0, $mo_fehlt)) / 60); // s -> min
+        /* E2 (1.1.24): Fehlwert -1 auch fuer STUNDEN und DAUER (bis 1.1.23 eine 0). */
+        $st['stunden'] = (int) mo_zahl_aus($s, 'hours', -1, $mo_fehlt);
+        $mo_dauer = (int) mo_zahl_aus($s, 'duration', -1, $mo_fehlt);
+        $st['dauer'] = ($mo_dauer < 0) ? -1 : (int) round($mo_dauer / 60); // s -> min
         $st['modus'] = (int) mo_zahl_aus($s, 'mode', -1, $mo_fehlt);
         $st['modus_text'] = mo_mode_text($st['modus']);
-        $st['maeht'] = ($st['code'] === 2) ? 1 : 0;
-        $st['laedt'] = ($st['code'] === 4) ? 1 : 0;
+        /* E2: ohne Statuscode (-1) sind auch maeht und laedt nicht bekannt. */
+        $st['maeht'] = ($st['code'] < 0) ? -1 : (($st['code'] === 2) ? 1 : 0);
+        $st['laedt'] = ($st['code'] < 0) ? -1 : (($st['code'] === 4) ? 1 : 0);
         if (isset($j['wlan']) && is_array($j['wlan'])) {
             $st['wlan'] = (int) mo_zahl_aus($j['wlan'], 'signal', -999, $mo_fehlt);
         }
@@ -1227,7 +1240,7 @@ function mo_state($dev = 1, $force = false, $stumm_beachten = true) {
         $mo_fl = array();
         if (isset($j['timer']) && is_array($j['timer'])) {
             $mo_tf = array();
-            $st['timer'] = (int) mo_zahl_aus($j['timer'], 'status', 0, $mo_tf);
+            $st['timer'] = (int) mo_zahl_aus($j['timer'], 'status', -1, $mo_tf);   // E2: -1 statt 0
             if ($mo_tf) { $mo_fehlt[] = 'timer'; $mo_fl[] = 'timer'; }
         } else {
             $mo_fehlt[] = 'timer';
@@ -1301,6 +1314,10 @@ function mo_state($dev = 1, $force = false, $stumm_beachten = true) {
     if ($st['stunden'] > 0) {
         $st['messer_rest'] = max(0, $iv - max(0, $st['stunden'] - $base));
         $st['messer_warn'] = $st['messer_rest'] <= 0 ? 1 : 0;
+    } else {
+        /* E2 (1.1.24): ohne Betriebsstunden (-1) ist auch die Messerwarnung nicht bekannt; 0 Stunden (neuer
+         * Maeher) heisst weiter "nicht faellig". */
+        $st['messer_warn'] = ($st['stunden'] < 0) ? -1 : 0;
     }
     mo_write_json($cache, $st);
     /* A12: solange der Maeher antwortet, wird wie bisher am WORTLAUT
@@ -1429,7 +1446,9 @@ function mo_gleichwert_lesen($dev, $soll)
  *
  * list($ok, $info) bei aelteren Aufrufern bleibt gueltig.
  */
-function mo_command($cmd, $dev = 1, $param = '', $probe = false) {
+/* Gruppe 2 / MQTT (1.1.24): $quelle 'mqtt' ruft die Befehlsbruecke (bin/befehle_zuordnung.php) - dieselbe
+ * Funktion wie der HTTP-Endpunkt, nur die Protokollzeile sagt "(ueber MQTT)"; ohne Wirkung auf den HTTP-Weg. */
+function mo_command($cmd, $dev = 1, $param = '', $probe = false, $quelle = 'http') {
     $m = mo_mower($dev);
     if ($m === null) { return array(0, 'Mäher nicht konfiguriert', 'anlage', array('GRUND' => 'nicht_konfiguriert')); }
     $cmd = strtolower(trim((string) $cmd));
@@ -1484,7 +1503,8 @@ function mo_command($cmd, $dev = 1, $param = '', $probe = false) {
      * stop sind Auftraege und bleiben ungebremst (Nr. 28). 'manuell' und
      * 'man' landen bei derselben Adresse und damit beim selben Sollwert. */
     $soll = ($ziel[0] === 'mode' && strpos($ziel[1], 'mode=') === 0) ? substr($ziel[1], 5) : null;
-    $zeile = '"' . $cmd . ($param !== '' ? ' ' . $param : '') . '" an ' . $m['name'];
+    $zeile = '"' . $cmd . ($param !== '' ? ' ' . $param : '') . '" an ' . $m['name']
+           . ($quelle === 'mqtt' ? ' (ueber MQTT)' : '');
     if ($probe) {
         /* Die Adresse wird gezeigt, das Passwort nicht - es geht ohnehin
          * ueber die Kopfzeile, nicht ueber die Adresse. Der Trockenlauf
@@ -1568,7 +1588,7 @@ function mo_command($cmd, $dev = 1, $param = '', $probe = false) {
  * 'nicht_erreichbar' (mit dem Grund des Abrufs in $text) oder
  * 'schreibfehler'. Der Abruf geht am Stumm-Merker vorbei - wer quittiert,
  * will wissen, ob der Maeher JETZT antwortet. */
-function mo_blade_reset($dev = 1, &$grund = null, &$text = null) {
+function mo_blade_reset($dev = 1, &$grund = null, &$text = null, $quelle = 'http') {
     $grund = '';
     $text = '';
     $p = mo_paths();
@@ -1583,6 +1603,13 @@ function mo_blade_reset($dev = 1, &$grund = null, &$text = null) {
     if (empty($st['ok'])) {
         $grund = 'nicht_erreichbar';
         $text = (string) ($st['grundtext'] !== '' ? $st['grundtext'] : $st['text']);
+        return 0;
+    }
+    /* Gruppe 2 / MQTT (1.1.24, Entwurf rb E2): liefert der Maeher keine Betriebsstunden, steht dort -1 - das
+     * darf nie zum Nullpunkt werden. Abgewiesen mit eigenem Grund (HTTP 502 wie nicht_erreichbar). */
+    if ((int) $st['stunden'] < 0) {
+        $grund = 'stunden_fehlt';
+        $text = 'Das Modul liefert keine Betriebsstunden';
         return 0;
     }
     $raw = json_decode((string) @file_get_contents($p['config']), true);
@@ -1604,7 +1631,7 @@ function mo_blade_reset($dev = 1, &$grund = null, &$text = null) {
     $mo_sf = mo_tmpdir() . '/state_' . (int) $dev . '.json';
     if (is_file($mo_sf)) { @unlink($mo_sf); }
     mo_log('Messerwechsel quittiert fuer ' . $st['name'] . ' - neuer Nullpunkt: '
-           . (int) $st['stunden'] . ' Betriebsstunden');
+           . (int) $st['stunden'] . ' Betriebsstunden' . ($quelle === 'mqtt' ? ' (ueber MQTT)' : ''));
     return 1;
 }
 
@@ -1885,7 +1912,9 @@ function mo_mqtt_satz($st, $dev = 1)
         if (in_array('modus', $fehlt, true)) { $strich[] = 'modus'; }
         if (in_array('timer', $fehlt, true)) { $strich[] = 'timer'; }
         if (in_array('stunden', $fehlt, true)) { $strich[] = 'messer_warn'; }
-        foreach ($strich as $k) { $m[$k] = '-'; }
+        /* Gruppe 2 / MQTT (1.1.24, Entwurf rb E2): die Zahlenthemen bekommen -1 ("nicht bekannt") statt '-';
+         * maeherstatus ist ein Text und behaelt '-'. -1 ist nicht leer und geht bei den Zustaenden retained. */
+        foreach ($strich as $k) { $m[$k] = ($k === 'maeherstatus') ? '-' : -1; }
     }
     return $m;
 }
@@ -1954,6 +1983,11 @@ function mo_mqtt_status($st)
     $grund = isset($st['grund']) ? $st['grund'] : '';
     if (mo_grund_klasse($grund) === 'nicht_erreichbar') {
         return mo_text_nicht_erreichbar();
+    }
+    /* Gruppe 2 / MQTT (1.1.24, Entwurf rb E5): ohne eingerichteten Maeher geht fuer Maeher 1 der Satz "nicht
+     * eingerichtet" hinaus (cron.php) - der Text sagt es, nicht "keine Verbindung". */
+    if ($grund === 'nicht_konfiguriert') {
+        return 'nicht eingerichtet';
     }
     return isset($st['text']) ? (string) $st['text'] : '';
 }
@@ -2071,8 +2105,8 @@ function mo_mqtt_publish($st = null, $dev = 1, $art = 'voll') {
  * mit Retain sogar ueber einen Neustart des Miniservers hinweg. Faellt der
  * Cron-Lauf aus, steht in Loxone weiter "parkt, Akku 80 %". Die drei Themen
  * unter <wurzel>/status/ gelten fuer die ganze Anlage. Ueber MQTT gibt es
- * kein "Alter", nur einen Zeitstempel - der Miniserver rechnet selbst:
- * Alter = (Loxone-Zeit + 1230768000) - ts. Der ZAEHLER beantwortet, was der
+ * kein "Alter", nur einen Zeitstempel. Gruppe 2 / MQTT (1.1.24): die Ausfallerkennung haengt am
+ * Zaehler status/zaehler (Analogwertvalidierung), nicht an einem Alter aus ts. Der ZAEHLER beantwortet, was der
  * Zeitstempel nicht kann (Uhrsprung ohne Echtzeituhr).
  *
  * A6 (06.09.2026): <praefix>/ts und <praefix>/zaehler je Maeher gehen hier
@@ -2900,13 +2934,14 @@ function mo_zusatzwerte($dev = 1)
         'zaehler'     => (int) $lauf['zaehler'],
         'fehleralter' => mo_fehler_alter_h(),
     );
-    if (!empty($cfg['stat_ein'])) {
-        $s = mo_stat_lesen();
-        $out['einsheute'] = (int) $s['eins_heute'];
-        $out['minheute']  = (int) $s['min_heute'];
-        $out['einswoche'] = (int) $s['eins_woche'];
-        $out['minwoche']  = (int) $s['min_woche'];
-    }
+    /* Gruppe 2 / MQTT (1.1.24, Entwurf rb E4): ohne den Haken "Einsaetze und Maehdauer mitzaehlen" gehen die vier
+     * Werte als -1 hinaus (HTTP und MQTT) - bis 1.1.23 gar nicht, und in Loxone stand der letzte Wert. */
+    $mo_stat = !empty($cfg['stat_ein']);
+    $s = $mo_stat ? mo_stat_lesen() : array();
+    $out['einsheute'] = $mo_stat ? (int) $s['eins_heute'] : -1;
+    $out['minheute']  = $mo_stat ? (int) $s['min_heute'] : -1;
+    $out['einswoche'] = $mo_stat ? (int) $s['eins_woche'] : -1;
+    $out['minwoche']  = $mo_stat ? (int) $s['min_woche'] : -1;
     return $out;
 }
 
@@ -3108,7 +3143,7 @@ function mo_events_check() {
             }
         }
         // Messerwechsel faellig (hoechstens einmal taeglich)
-        if (!empty($cfg['notify']['messer']) && $st['messer_warn']) {
+        if (!empty($cfg['notify']['messer']) && (int) $st['messer_warn'] === 1) {   // -1 = unbekannt (1.1.24)
             $mf = mo_tmpdir() . '/messer_' . $n . '_' . date('Ymd');
             if (!is_file($mf)) {
                 @file_put_contents($mf, '1');
@@ -3298,39 +3333,42 @@ function mo_felder() {
                               'Auto, Manuell, Zuhause, Auftrag; -1 = unbekannt'),
         'BATT'       => array(1, -1, 100, '%',   'Batterie in Prozent',
                               '-1 = nicht bekannt, der Mäher antwortet nicht'),
-        'MAEHT'      => array(0, 0, 1,    '',    '1 = mäht gerade'),
-        'LAEDT'      => array(0, 0, 1,    '',    '1 = lädt gerade'),
+        /* Gruppe 2 / MQTT (1.1.24, Entwurf rb E2): MinVal -1 an MAEHT, LAEDT, STUNDEN, DAUER, MESSERWARN und
+         * TIMER - die Vorlage wird dort Signed; -1 = nicht bekannt. */
+        'MAEHT'      => array(0, -1, 1,   '',    '1 = mäht gerade', '-1 = nicht bekannt'),
+        'LAEDT'      => array(0, -1, 1,   '',    '1 = lädt gerade', '-1 = nicht bekannt'),
         'FEHLER'     => array(1, 0, 10000,'',    'Fehlercode (0 = kein Fehler)'),
-        'STUNDEN'    => array(1, 0, 100000,'h',  'Mähstunden gesamt'),
-        'DAUER'      => array(1, 0, 10000,'min', 'Dauer des laufenden Einsatzes'),
+        'STUNDEN'    => array(1, -1, 100000,'h', 'Mähstunden gesamt', '-1 = nicht bekannt'),
+        'DAUER'      => array(1, -1, 10000,'min','Dauer des laufenden Einsatzes', '-1 = nicht bekannt'),
         'MESSER'     => array(1, -1, 10000,'h',  'Messer: Reststunden',
                               'bis zum Wechsel, -1 = nicht bekannt'),
-        'MESSERWARN' => array(0, 0, 1,    '',    '1 = Messerwechsel fällig'),
+        'MESSERWARN' => array(0, -1, 1,   '',    '1 = Messerwechsel fällig', '-1 = nicht bekannt'),
         'TEMP'       => array(1, -999, 80, '°C',  'Temperatur am Mäher',
                               '-999 = nicht bekannt; -1 wäre hier ein gültiger Messwert'),
         'FEUCHTE'    => array(1, -1, 100,  '%',  'Luftfeuchte am Mäher',
                               '-1 = nicht bekannt'),
         'WLAN'       => array(1, -999, 0, 'dBm', 'WLAN-Signalstärke',
                               '-999 = nicht bekannt; 0 wäre hier das beste Signal'),
-        'TIMER'      => array(0, 0, 1,    '',    '1 = Timer aktiv'),
+        'TIMER'      => array(0, -1, 1,   '',    '1 = Timer aktiv', '-1 = nicht bekannt'),
         'ANN'        => array(0, 0, 1,    '',    'Meldefenster aktiv'),
         'AUDIO'      => array(0, 0, 1,    '',    'Ansage freigegeben'),
         'PUSH'       => array(0, 0, 1,    '',    'Push freigegeben'),
         'PTEST'      => array(0, 0, 1,    '',    'Test-Push auslösen'),
         // --- ab 1.1.0, hinten angehaengt ---
         'TS'          => array(1, 0, 2000000000, 's', 'Zeitstempel des letzten Cron-Laufs',
-                               'Unix-Sekunden. Alter = (Loxone-Zeit + 1230768000) - TS'),
+                               'Unix-Sekunden, nur zur Anzeige - die Ausfallerkennung hängt am Zähler'),
         'ZAEHLER'     => array(1, 0, 999,  '',   'Laufzähler 0...999',
                                'läuft um; steht er still, läuft der Cron nicht mehr'),
         'FEHLERALTER' => array(1, -1, 100000, 'h', 'Stunden seit dem letzten Fehler',
                                '-1 = keiner bekannt'),
     );
-    if (!empty($cfg['stat_ein'])) {
-        $f['EINSHEUTE'] = array(1, 0, 99,    '',    'Abgeschlossene Maeheinsaetze heute');
-        $f['MINHEUTE']  = array(1, 0, 10000, 'min', 'Maehdauer heute');
-        $f['EINSWOCHE'] = array(1, 0, 999,   '',    'Abgeschlossene Maeheinsaetze diese Woche');
-        $f['MINWOCHE']  = array(1, 0, 100000,'min', 'Maehdauer diese Woche');
-    }
+    /* Gruppe 2 / MQTT (1.1.24, Entwurf rb E4): die vier Statistikfelder stehen IMMER in der Vorlage (MinVal -1);
+     * ohne den Haken "Einsaetze und Maehdauer mitzaehlen" senden sie -1. $cfg bleibt fuer die Bauform stehen. */
+    unset($cfg);
+    $f['EINSHEUTE'] = array(1, -1, 99,    '',    'Abgeschlossene Maeheinsaetze heute', '-1 = Statistik im Plugin aus');
+    $f['MINHEUTE']  = array(1, -1, 10000, 'min', 'Maehdauer heute', '-1 = Statistik im Plugin aus');
+    $f['EINSWOCHE'] = array(1, -1, 999,   '',    'Abgeschlossene Maeheinsaetze diese Woche', '-1 = Statistik im Plugin aus');
+    $f['MINWOCHE']  = array(1, -1, 100000,'min', 'Maehdauer diese Woche', '-1 = Statistik im Plugin aus');
     return $f;
 }
 /** Gepruefter PHP-Nachbau des LoxoneTemplateBuilder - Attributreihenfolge,
@@ -3728,6 +3766,7 @@ function mo_nennen($k)
         'cache_sec' => 'TEXT.STATUS_CACHE_SEKUNDEN', 'blade_hours' => 'TEXT.MESSERWECHSEL_INTERVALL_BETRIEBSST',
         'blade_base' => 'TEXT.NULLPUNKT_STUNDEN_BEIM_LETZTEN_WEC', 'mqtt_topic' => 'TEXT.TOPIC_PRFIX',
         'mqtt_enabled' => 'TEXT.ZUSTAND_PER_MQTT_VERFFENTLICHEN', 'stat_ein' => 'TEXT.STAT_EIN',
+        'befehle_mqtt_ein' => 'BEFEHL.HAKEN_EIN', 'befehle_mqtt_steuern' => 'BEFEHL.HAKEN_STEUERN',
         'aktionstoken' => 'TEXT.H_TOKEN', 'mowers' => 'TEXT.NENN_MAEHER', 'notify' => 'TEXT.MELDUNGEN',
         'tts' => 'TEXT.SPRACHAUSGABE', 'tts.mode' => 'TEXT.AUDIO_AUSGABE', 'tts.ip' => 'TEXT.IP_DES_AUDIO_SERVERS',
         'tts.port' => 'TEXT.PORT', 'tts.zones' => 'TEXT.ZONEN', 'tts.volume' => 'TEXT.LAUTSTRKE',
@@ -3941,6 +3980,8 @@ function mo_wert_pruefen($k, $v)
         case 'blade_hours':  return mo_zahl_pruefen($k, $v, 1, 2000);
         case 'blade_base':   return mo_zahl_pruefen($k, $v, 0, 100000);
         case 'mqtt_enabled':
+        case 'befehle_mqtt_ein':
+        case 'befehle_mqtt_steuern':
         case 'stat_ein':     return mo_zahl_pruefen($k, $v, 0, 1);
     }
     return array(null, array(mo_mangel('', $k, sprintf(mo_t('TEXT.SICH_FREMD'),
@@ -4062,6 +4103,9 @@ function mo_sicherung_lesen($roh)
      * Verglichen wird gegen die VORGABEN. */
     $fehlend = array();
     foreach (array_keys(mo_vorgaben()) as $fk) {
+        /* Gruppe 2 / MQTT (1.1.24): die Haken der Befehlsbruecke kennt eine Sicherung bis 1.1.23 nicht - dann gilt
+         * ihre Vorgabe (aus); sonst waere jede aeltere Sicherung abgewiesen. */
+        if (in_array($fk, mo_spaet_schluessel(), true)) { continue; }
         if (!array_key_exists($fk, $daten)) {
             $fehlend[] = $fk;
         }
@@ -4370,7 +4414,8 @@ function mo_themen()
     $je_maeher = array_merge($je_maeher, array_keys(mo_meldeflags(1)));
     $je_maeher = array_merge($je_maeher, array_keys(mo_zusatzwerte(1)));
     return array('maeher' => $je_maeher,
-                 'anlage' => array('status/ts', 'status/zaehler', 'status/ok'));
+                 /* status/befehle sendet der Waechter der Befehlsbruecke (1.1.24, Entwurf rb 2.2). */
+                 'anlage' => array('status/ts', 'status/zaehler', 'status/ok', 'status/befehle'));
 }
 
 /**
@@ -4622,6 +4667,12 @@ function mo_selbsttest($datei, array $reiter, $test_offen = false)
                       count($th['maeher']), count($th['anlage']), count($felder)));
     }
 
+    /* --- Gruppe 2 / MQTT (1.1.24, Entwurf rb 2.4): Namenstabelle gegen die gesendeten Themen, Haken unter
+     * Gateway V2, Befehlsbruecke. */
+    list($ok, $txt) = mo_mqtt_namen_probe();             $add('PRUEF.NAMEN', $ok, $txt);
+    list($ok, $txt) = mo_mqtt_v2_haken_lage();           $add('PRUEF.V2_HAKEN', $ok, $txt);
+    list($ok, $txt) = mo_pruef_bruecke();                $add('PRUEF.BRUECKE', $ok, $txt);
+
     // --- Die eigene Datei
     list($ok, $txt) = mo_reiterprobe($reiter, $datei);   $add('PRUEF.REITER', $ok, $txt);
     list($ok, $txt) = mo_formularprobe($datei);          $add('PRUEF.FORMULARE', $ok, $txt);
@@ -4632,6 +4683,368 @@ function mo_selbsttest($datei, array $reiter, $test_offen = false)
     list($ok, $txt) = mo_signaturprobe();                $add('PRUEF.SIGNATUR', $ok, $txt);
 
     return $z;
+}
+
+/* ==================================================================
+ * Gruppe 2 / MQTT (1.1.24, 19.10.2026): Namenstabelle, Hakenliste und Befehlsbruecke
+ * ==================================================================
+ *
+ * Grundlage: Musterprojekt/entwurf_gruppe2_rb.txt (E1-E19 wie empfohlen), ENTSCHEIDUNGEN_GRUPPE2_MQTT.md,
+ * Bauvorschrift Gruppe 1 Nachtrag 2 (Hausherr 19.10.2026): fuer Werte ueber das MQTT-Gateway gibt es KEINE
+ * Importvorlage - man legt je Wert einen einfachen Virtuellen Eingang an (Text: Virtuellen Texteingang), Name
+ * genau so, wie das Gateway ihn vergibt. Die Namen kommen aus EINER Funktion (mo_mqtt_gateway_name()) fuer die
+ * Namenstabelle im Reiter "Einbindung in Loxone", die Hakenliste unter Gateway V2, die Baustein-Listen und die
+ * Selbstpruefung (Regeln/07 "Themennamen aus EINER Funktion").
+ * ================================================================== */
+
+/**
+ * Der Name, unter dem das MQTT-Gateway ein Thema an den Miniserver gibt: Praefix (aus mo_mqtt_praefix()), ab Maeher 2
+ * mit der Nummer, dann das Thema; "/", "%" und Leerzeichen werden "_" (Regeln/07, Umbenennungsregel beider
+ * Gateway-Fassungen; Midea2Lox 4.5.17 am Geraet gemessen: jedes "/" im Thema wird "_").
+ */
+function mo_mqtt_gateway_name($thema, $dev = 1)
+{
+    $c = mo_config();
+    $p = mo_mqtt_praefix(isset($c['mqtt_topic']) ? $c['mqtt_topic'] : '');
+    if ((int) $dev > 1) { $p .= '/' . (int) $dev; }
+    return str_replace(array('/', '%', ' '), '_', $p . '/' . (string) $thema);
+}
+
+/** Datenpunkte, die unter Gateway V2 "Noncached" brauchen: sie gehen jede Minute mit gleichem Wert hinaus (ok, das
+ *  Lebenszeichen der Befehlsbruecke) - mit der Doppelt-Sperre des Gateway-Zwischenspeichers fehlten sie nach einem
+ *  Neustart des Miniservers (Entwurf rb E9, wie Marstek E18). */
+function mo_mqtt_noncached()
+{
+    return array('ok', 'status/befehle');
+}
+
+/** Themen, die das Plugin sendet, die die Musterseiten aber nicht brauchen (Entwurf rb E7): kein Haken unter V2. */
+function mo_mqtt_nicht_im_muster()
+{
+    return array('maeherstatus', 'ts', 'zaehler', 'status/ts', 'status/ok');
+}
+
+/**
+ * Die Namenstabelle (Reiter "Einbindung in Loxone", Schritt 3) - EINE Liste fuer Tabelle, Hakenliste und
+ * Selbstpruefung. Reihenfolge = mo_themen(): die Themen je Maeher, dann die der Anlage (status/...). Rueckgabe je
+ * Zeile array('thema', 'name', 'bedeutung', 'art' zahl|text, 'bereich', 'noncached' bool, 'im_muster' bool).
+ * $dev > 1: nur die Themen je Maeher, unter seiner Nummer.
+ */
+function mo_mqtt_namen($dev = 1)
+{
+    $dev = max(1, (int) $dev);
+    $th = mo_themen();
+    $felder = mo_felder();
+    $karte = mo_thema_feld();
+    $nc = mo_mqtt_noncached();
+    $ohne = mo_mqtt_nicht_im_muster();
+    $texte = array('status' => 'TEXT.TH_STATUS', 'maeherstatus' => 'TEXT.TH_MAEHERSTATUS',
+                   'status/ts' => 'TEXT.TH_TS', 'status/zaehler' => 'TEXT.TH_ZAEHLER',
+                   'status/ok' => 'TEXT.TH_OK', 'status/befehle' => 'TEXT.TH_BEFEHLE');
+    $bereich = array('status/ts' => array(0, 2000000000, 's'), 'status/zaehler' => array(0, 999, ''),
+                     'status/ok' => array(0, 1, ''), 'status/befehle' => array(-1, 1, ''));
+    $alle = ($dev > 1) ? $th['maeher'] : array_merge($th['maeher'], $th['anlage']);
+    $aus = array();
+    foreach ($alle as $t) {
+        $f = isset($karte[$t]) ? $karte[$t] : strtoupper($t);
+        $text = ($t === 'status' || $t === 'maeherstatus');
+        if (isset($texte[$t])) {
+            $bed = mo_t($texte[$t]);
+        } elseif ($f !== '' && isset($felder[$f])) {
+            $bed = mo_feld_text($f);
+        } else {
+            $bed = sprintf(mo_t('TEXT.TH_OHNE'), $t);
+        }
+        $b = '';
+        if (!$text) {
+            if (isset($bereich[$t])) {
+                list($mi, $ma, $ei) = $bereich[$t];
+            } elseif ($f !== '' && isset($felder[$f])) {
+                list(, $mi, $ma, $ei) = $felder[$f];
+            } else {
+                $mi = ''; $ma = ''; $ei = '';
+            }
+            $b = $mi . ' … ' . $ma . ($ei !== '' ? ' ' . $ei : '');
+        }
+        $aus[] = array('thema' => $t, 'name' => mo_mqtt_gateway_name($t, $dev), 'bedeutung' => $bed,
+                       'art' => $text ? 'text' : 'zahl', 'bereich' => $b,
+                       'noncached' => in_array($t, $nc, true), 'im_muster' => !in_array($t, $ohne, true));
+    }
+    return $aus;
+}
+
+/** Hakenliste fuer Gateway V2 (Entwurf rb 2.4): die Zeilen der Namenstabelle mit im_muster - Maeher 1: 27 (26 Zahlen,
+ *  1 Text), davon 2 Noncached. Rueckgabe je Zeile array(thema voll, Name in Loxone, Bedeutung, art, noncached). */
+function mo_mqtt_hakenliste($dev = 1)
+{
+    $c = mo_config();
+    $p = mo_mqtt_praefix(isset($c['mqtt_topic']) ? $c['mqtt_topic'] : '') . ((int) $dev > 1 ? '/' . (int) $dev : '');
+    $aus = array();
+    foreach (mo_mqtt_namen($dev) as $z) {
+        if (!$z['im_muster']) { continue; }
+        $aus[] = array($p . '/' . $z['thema'], $z['name'], $z['bedeutung'], $z['art'], $z['noncached']);
+    }
+    return $aus;
+}
+
+/**
+ * Stehen unter Gateway V2 die Haken? Gelesen wird config/system/subscriptions.json (Subscriptions[].Id je Thema,
+ * Noncached; Form wie Spotpreis aWATTar 1.2.38 und Midea2Lox). Rueckgabe array(1|0|2, Klartext): 1 jeder Datenpunkt der
+ * Hakenliste (alle eingerichteten Maeher) angehakt, die Noncached-Themen so markiert; 0 es fehlt etwas (genannt);
+ * 2 nicht feststellbar (Gateway V1, Fassung oder Datei nicht lesbar).
+ */
+function mo_mqtt_v2_haken_lage()
+{
+    $gw = mo_mqtt_gateway_info();
+    if ($gw === null || (int) $gw['fassung'] === 0) { return array(2, mo_t('TEXT.PRUEF_V2_UNKLAR')); }
+    if ((int) $gw['fassung'] < 2) { return array(2, mo_t('TEXT.PRUEF_V2_V1')); }
+    $p = mo_paths();
+    $d = json_decode((string) @file_get_contents($p['lbhome'] . '/config/system/subscriptions.json'), true);
+    if (!is_array($d)) { return array(2, mo_t('TEXT.PRUEF_V2_UNKLAR')); }
+    $liste = array();
+    foreach (array('Subscriptions', 'subscriptions') as $s) {
+        if (isset($d[$s]) && is_array($d[$s])) { $liste = $d[$s]; break; }
+    }
+    $abo = array();
+    foreach ($liste as $e) {
+        if (!is_array($e)) { continue; }
+        $id = '';
+        foreach (array('Id', 'id', 'Topic', 'topic') as $k) {
+            if (isset($e[$k]) && is_string($e[$k])) { $id = $e[$k]; break; }
+        }
+        if ($id === '') { continue; }
+        $nc = false;
+        foreach (array('Noncached', 'noncached') as $k) {
+            if (isset($e[$k])) {
+                $nc = ($e[$k] === true || in_array(strtolower(trim((string) $e[$k])), array('1', 'true', 'yes', 'on'), true));
+            }
+        }
+        $abo[$id] = $nc;
+    }
+    $soll = mo_mqtt_hakenliste(1);
+    foreach (array_keys(mo_mowers()) as $n) {
+        if ((int) $n > 1) { $soll = array_merge($soll, mo_mqtt_hakenliste($n)); }
+    }
+    $fehlt = array();
+    $ohne = array();
+    $n_nc = 0;
+    foreach ($soll as $z) {
+        if ($z[4]) { $n_nc++; }
+        if (!array_key_exists($z[0], $abo)) {
+            $fehlt[] = $z[0];
+        } elseif ($z[4] && !$abo[$z[0]]) {
+            $ohne[] = $z[0];
+        }
+    }
+    if (!$fehlt && !$ohne) { return array(1, sprintf(mo_t('TEXT.PRUEF_V2_OK'), count($soll), $n_nc)); }
+    $kurz = function ($l) {
+        return $l ? mw_e(implode(', ', array_slice($l, 0, 8)) . (count($l) > 8 ? ' ...' : '')) : '-';
+    };
+    return array(0, sprintf(mo_t('TEXT.PRUEF_V2_FEHLT'), $kurz($fehlt), $kurz($ohne)));
+}
+
+/**
+ * Pruefzeile "Namenstabelle" (Entwurf rb 2.4, Bauart Abfuhrkalender B58): jeder Name der Tabelle muss ein Name sein,
+ * unter dem das Gateway WIRKLICH sendet, und jedes gesendete Thema muss in der Tabelle stehen. Die Gegenseite wird
+ * UNABHAENGIG von mo_mqtt_gateway_name() gebildet: aus den Themen, die mo_mqtt_publish() (mo_mqtt_satz()),
+ * mo_mqtt_lebenszeichen() und die Befehlsbruecke senden, mit der Umbenennungsregel des Gateways. Rueckgabe
+ * array(1|0, Text).
+ */
+function mo_mqtt_namen_probe()
+{
+    $c = mo_config();
+    $w = mo_mqtt_praefix(isset($c['mqtt_topic']) ? $c['mqtt_topic'] : '');
+    $gesendet = array();
+    foreach (array_keys(mo_mqtt_satz(mo_mqtt_probe_zustand(), 1)) as $k) { $gesendet[] = $w . '/' . $k; }
+    foreach (array('ts', 'zaehler', 'ok') as $k) { $gesendet[] = $w . '/' . $k; }               // Lebenszeichen je Maeher
+    foreach (array('status/ts', 'status/zaehler', 'status/ok') as $k) { $gesendet[] = $w . '/' . $k; }
+    $gesendet[] = $w . '/status/befehle';                                                       // bb_status_senden()
+    $soll = array();
+    foreach (array_unique($gesendet) as $t) { $soll[] = str_replace(array('/', '%', ' '), '_', $t); }
+    $ist = array();
+    foreach (mo_mqtt_namen(1) as $z) { $ist[] = $z['name']; }
+    $nur_tabelle = array_values(array_diff($ist, $soll));
+    $nur_gesendet = array_values(array_diff($soll, $ist));
+    if ($nur_tabelle || $nur_gesendet) {
+        return array(0, sprintf(mo_t('TEXT.PRUEF_NAMEN_NEIN'),
+            $nur_tabelle ? mw_e(implode(', ', $nur_tabelle)) : '-', $nur_gesendet ? mw_e(implode(', ', $nur_gesendet)) : '-'));
+    }
+    return array(1, sprintf(mo_t('TEXT.PRUEF_NAMEN_JA'), count($ist)));
+}
+
+/* ---------------- Befehlsbruecke (bin/befehlsbruecke.php, Stammfassung Werkzeuge/gemeinsam) ----------------
+ * Linieneigen ist nur bin/befehle_zuordnung.php. Die Bruecke ruft dieselben Funktionen wie mower.php - mo_command()
+ * und mo_blade_reset() - mit Quelle 'mqtt'; die Token-Pruefung bleibt im HTTP-Endpunkt, auf dem MQTT-Weg ersetzen sie
+ * die Anmeldung am Broker und die beiden Haken (Entwurf rb 3.2). */
+
+/** Einstellungen fuer die Zuordnung (Entwurf gemeinsam 2.5): Praefix aus der EINEN Themenfunktion, annehmen = Haken
+ *  "Befehle ueber MQTT annehmen" UND MQTT an, eingreifend = zweiter Haken "Maeher ueber MQTT steuern". */
+function mo_befehle_einstellungen()
+{
+    $c = mo_config();
+    $mqtt = !empty($c['mqtt_enabled']);
+    return array('praefix' => mo_mqtt_praefix(isset($c['mqtt_topic']) ? $c['mqtt_topic'] : ''),
+                 'annehmen' => !empty($c['befehle_mqtt_ein']) && $mqtt,
+                 'eingreifend' => !empty($c['befehle_mqtt_steuern']), 'mqtt_ein' => $mqtt);
+}
+
+/** Die Rueckgabe von mo_command() (array(ok, info, art, zusatz)) fuer die Bruecke: array(bool, Grund). OK=1 heisst
+ *  angenommen - auch UNVERAENDERT=1 (Gleichwert-Sperre des Plugins: derselbe Modus ging eben schon hinaus). Der Grund
+ *  kommt als Wort aus GRUND bzw. der Art (NICHT_KONFIGURIERT, KEINE_ANTWORT, MODUL, BREMSE_MERKER, ANFRAGE). */
+function mo_befehl_ergebnis($r)
+{
+    if (is_array($r) && isset($r[0]) && (int) $r[0] === 1) { return array(true, ''); }
+    $g = (is_array($r) && isset($r[3]['GRUND']) && $r[3]['GRUND'] !== '') ? (string) $r[3]['GRUND']
+        : ((is_array($r) && isset($r[2]) && $r[2] !== '') ? (string) $r[2] : 'fehlgeschlagen');
+    return array(false, strtoupper(preg_replace('/[^a-z0-9_]/i', '', $g)));
+}
+
+/** Messerwechsel ueber die Bruecke: mo_blade_reset() wie ?cmd=blade_reset; Grund NICHT_EINGERICHTET,
+ *  NICHT_ERREICHBAR, STUNDEN_FEHLT oder SCHREIBFEHLER. */
+function mo_befehl_messer($dev)
+{
+    $g = '';
+    $t = '';
+    $ok = mo_blade_reset((int) $dev, $g, $t, 'mqtt');
+    return array($ok === 1, $ok === 1 ? '' : strtoupper((string) $g));
+}
+
+/** Wo liegt bin/befehlsbruecke.php? Installiert unter bin/plugins/<ordner>, sonst neben dem Arbeitsordner. */
+function mo_bruecke_datei()
+{
+    $p = mo_paths();
+    $kand = array();
+    if ($p['lbhome'] !== '') { $kand[] = $p['lbhome'] . '/bin/plugins/' . $p['plugin'] . '/befehlsbruecke.php'; }
+    $kand[] = dirname(dirname(__DIR__)) . '/bin/befehlsbruecke.php';
+    foreach ($kand as $k) {
+        if (is_file($k)) { return $k; }
+    }
+    return '';
+}
+
+/** Die Bruecke als Bibliothek laden (BB_NUR_LADEN: kein Hauptteil). Rueckgabe true, wenn sie da ist. */
+function mo_bruecke_laden()
+{
+    if (function_exists('bb_waechter')) { return true; }
+    $f = mo_bruecke_datei();
+    if ($f === '') { return false; }
+    if (!defined('BB_NUR_LADEN')) { define('BB_NUR_LADEN', true); }
+    require_once $f;
+    return function_exists('bb_waechter');
+}
+
+/** Waechter im Minutentakt (cron.php, Bauvorschrift Gruppe 1 Nachtrag: "Linien mit PHP-Minutentakt rufen
+ *  bb_waechter()"). Startet, haelt an, misst zustand.json, sendet <praefix>/status/befehle. Der Cron haelt cron.lock;
+ *  befehlsbruecke.sh schliesst geerbte Deskriptoren (Brueckenbericht 4 Nr. 3). */
+function mo_bruecke_waechter()
+{
+    if (!mo_bruecke_laden()) { return array(null, 'keine Befehlsbruecke'); }
+    return bb_waechter();
+}
+
+/**
+ * Direktstart bzw. -stopp beim Speichern des Reiters MQTT (Bauart fer_bruecke_schalten(), FerienFeiertage 1.2.27):
+ * der Waechter startet nach einem Start hoechstens alle 600 s neu (Neustart-Bremse der Stammfassung) - ohne Direktstart
+ * liefe die Bruecke nach dem Einschalten des Hakens bis zu 10 Minuten nicht. befehlsbruecke.sh start startet nur nach
+ * --soll, nie als root, nie waehrend eines Updates, nie doppelt. Rueckgabe array(''|'ein'|'aus'|'start_fehl'|
+ * 'stop_fehl', Ausgabe).
+ */
+function mo_bruecke_schalten()
+{
+    if (!mo_bruecke_laden()) { return array('', ''); }
+    $p = bb_pfade();
+    if (!$p) { return array('', ''); }
+    $e = mo_befehle_einstellungen();
+    $laeuft = (bool) bb_dienste();
+    if ($e['annehmen']) {
+        if ($laeuft) { return array('', ''); }
+        list($rc, $aus) = bb_sh($p, 'start');
+        if ($rc === 0 && bb_dienste()) {
+            mo_log('Befehlsbruecke beim Speichern gestartet.');
+            return array('ein', $aus);
+        }
+        mo_log('Befehlsbruecke: Start beim Speichern gescheitert (Rueckgabe ' . (int) $rc . '): ' . mo_kuerzen($aus, 200));
+        return array('start_fehl', $aus);
+    }
+    if (!$laeuft) { return array('', ''); }
+    list($rc, $aus) = bb_sh($p, 'stop');
+    if ($rc === 0 && !bb_dienste()) {
+        mo_log('Befehlsbruecke beim Speichern angehalten.');
+        return array('aus', $aus);
+    }
+    return array('stop_fehl', $aus);
+}
+
+/** Die Befehlsliste der Bruecke (bb_liste(): EINE Quelle fuer Reiter und Vorlage) oder null. */
+function mo_befehle_liste()
+{
+    if (!mo_bruecke_laden()) { return null; }
+    list($z) = bb_zuordnung_laden();
+    if ($z === null) { return null; }
+    list($f) = bb_zuordnung_pruefen($z);
+    if ($f) { return null; }
+    return bb_liste($z, bb_einstellungen($z));
+}
+
+/** Vorlage "Rasenmaeher MQTT-Befehle" (bb_vorlage(), Entwurf rb E18): eigener Virtueller Ausgang an den UDP-Eingang
+ *  des Gateways. Rueckgabe array(name, inhalt) oder null. */
+function mo_befehle_vorlage()
+{
+    $l = mo_befehle_liste();
+    if ($l === null) { return null; }
+    $host = isset($_SERVER['HTTP_HOST']) && $_SERVER['HTTP_HOST'] !== ''
+        ? preg_replace('/[^A-Za-z0-9\.\-]/', '', preg_replace('/:\d+\z/', '', (string) $_SERVER['HTTP_HOST']))
+        : (gethostname() ?: 'loxberry');
+    $port = mo_mqtt_udpport();
+    return array('VQ_robonect_mqtt.xml', bb_vorlage($l, $host !== '' ? $host : 'loxberry', $port > 0 ? $port : 11884));
+}
+
+/** Zeile "Laeuft die Befehlsbruecke?" (Entwurf gemeinsam 2.11): array(1|0|2, Text). Gemessen wird das Erzeugnis
+ *  (zustand.json: ts, abo, Zaehler) und ob ein Dienst argumentweise laeuft - wie der Waechter, nicht die PID. */
+function mo_pruef_bruecke()
+{
+    if (!mo_bruecke_laden()) { return array(0, mo_t('BEFEHL.P_FEHLT')); }
+    list($z, $fehler) = bb_zuordnung_laden();
+    if ($z === null) { return array(0, sprintf(mo_t('BEFEHL.P_DEFEKT'), mw_e($fehler))); }
+    list($f) = bb_zuordnung_pruefen($z);
+    if ($f) { return array(0, sprintf(mo_t('BEFEHL.P_DEFEKT'), mw_e($f[0]))); }
+    $c = mo_config();
+    if (empty($c['befehle_mqtt_ein'])) { return array(2, mo_t('BEFEHL.P_AUS')); }
+    if (empty($c['mqtt_enabled'])) { return array(2, mo_t('BEFEHL.P_MQTT_AUS')); }
+    $zu = bb_zustand_lesen();
+    $alter = ($zu && isset($zu['ts'])) ? time() - (int) $zu['ts'] : null;
+    if (!bb_dienste()) { return array(0, mo_t('BEFEHL.P_STEHT')); }
+    if ($alter === null || $alter > BB_WACHE_GRENZE) { return array(0, sprintf(mo_t('BEFEHL.P_HAENGT'), (int) $alter)); }
+    if (empty($zu['abo'])) {
+        return array(0, sprintf(mo_t('BEFEHL.P_OHNE_ABO'), mw_e(isset($zu['fehler']) ? (string) $zu['fehler'] : '')));
+    }
+    $zl = (isset($zu['zaehler']) && is_array($zu['zaehler'])) ? $zu['zaehler'] : array();
+    $t = sprintf(mo_t('BEFEHL.P_LAEUFT'), date('d.m.Y H:i', isset($zu['start']) ? (int) $zu['start'] : time()),
+                 isset($zl['angenommen']) ? (int) $zl['angenommen'] : 0, isset($zl['abgelehnt']) ? (int) $zl['abgelehnt'] : 0,
+                 isset($zl['verworfen']) ? (int) $zl['verworfen'] : 0);
+    if (!empty($zu['letzter']) && is_array($zu['letzter'])) {
+        $t .= ' ' . sprintf(mo_t('BEFEHL.P_LETZTER'), mw_e((string) $zu['letzter']['name']),
+                            mw_e((string) $zu['letzter']['ergebnis']), max(0, time() - (int) $zu['letzter']['zeit']));
+    }
+    if (!empty($zl['verworfen'])) { $t .= ' ' . mo_t('BEFEHL.P_VERWORFEN'); }
+    return array(1, $t);
+}
+
+/** Die Zeilen von "befehlsbruecke.php --pruefen" (bb_pruefen()) fuer den Reiter Test; leer ohne Bruecke. */
+function mo_bruecke_pruefzeilen()
+{
+    if (!mo_bruecke_laden()) { return array(); }
+    ob_start();
+    bb_pruefen();
+    $aus = (string) ob_get_clean();
+    return array_values(array_filter(explode("\n", $aus), 'strlen'));
+}
+
+/** Schluessel, die eine Sicherung aus einer frueheren Fassung noch nicht kennt: fehlen sie, gilt ihre Vorgabe (beide
+ *  Haken der Befehlsbruecke ab Werk aus) - sonst wiese das Zurueckspielen jede Sicherung bis 1.1.23 ab. */
+function mo_spaet_schluessel()
+{
+    return array('befehle_mqtt_ein', 'befehle_mqtt_steuern');
 }
 
 /* Der Escape-Helfer gehoert in die Bibliothek, nicht in

@@ -259,6 +259,17 @@ done
 
 mo_zweitschrift_holen
 
+# ---------- Gruppe 2 / MQTT (1.1.24): die Befehlsbruecke wieder starten ----------
+# Erst die Upgrade-Marke weg (sonst lehnt befehlsbruecke.sh den Start ab; die trap raeumt sie sonst erst am Ende
+# ab), dann start. Er startet nur, wenn die zurueckgespielte Konfiguration den Haken "Befehle ueber MQTT
+# annehmen" traegt (befehlsbruecke.php --soll); sonst holt es der Minutenlauf binnen einer Minute nach. Nie als
+# root - die Hakenskripte laufen als loxberry (Regeln/06).
+rm -f "$MARKE" 2>/dev/null
+BBSH="$BASE/bin/plugins/$PFOLDER/befehlsbruecke.sh"
+if [ -f "$BBSH" ] && [ "$(id -u)" != "0" ]; then
+    timeout 40 bash "$BBSH" start 2>&1 | head -n 1 | sed 's/^/<INFO> Befehlsbruecke: /'
+fi
+
 # A15: die Schlusszeile des Aktualisierungsfalls steht HIER, nicht in
 # postinstall.sh - erst jetzt ist die gerettete Konfiguration wirklich an
 # ihrem Platz. postinstall.sh schweigt dafuer, wenn der Merker

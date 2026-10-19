@@ -221,7 +221,7 @@ $mw_eingaben = null;
  *  nie Kennwort (m_pass) und die Sprechtoken (tts_alexa_token, tts_google_token). */
 function mw_eingaben_sammeln($formular, array $falsch)
 {
-    $namen = ($formular === 'mqtt') ? array('mqtt_enabled', 'mqtt_topic')
+    $namen = ($formular === 'mqtt') ? array('mqtt_enabled', 'mqtt_topic', 'befehle_mqtt_ein', 'befehle_mqtt_steuern')
         : array_merge(array('cache_sec', 'blade_hours', 'blade_base', 'stat_ein', 'notify_audio', 'notify_push',
                 'n_fehler', 'n_fertig', 'n_messer', 'n_akku'),
                 ansage_x2_felder(mo_ansage_opt()));     // Nr. 36 b, Stufe 2: ohne die Sprechtoken
@@ -263,6 +263,21 @@ if ($mw_ist_post && (isset($_POST['vorlage']) || isset($_POST['vorlage_vo']))) {
         exit;
     }
     $mw_fehler[] = sprintf(mo_t('TEXT.VORLAGE_DEV_FALSCH'), htmlspecialchars(mo_kuerzen($mw_vd, 10), ENT_QUOTES, 'UTF-8'));
+    $mw_tab = 'tab-loxone';
+}
+
+/* Gruppe 2 / MQTT (1.1.24): Vorlage "Rasenmaeher MQTT-Befehle" (bb_vorlage() der Befehlsbruecke, Entwurf rb
+ * E18) - ein eigener Virtueller Ausgang an den UDP-Eingang des MQTT-Gateways; ohne Token (die Haken im Plugin
+ * ersetzen es). Download, also vor lbheader(). */
+if ($mw_ist_post && isset($_POST['vorlage_bb'])) {
+    $mw_bbv = mo_befehle_vorlage();
+    if ($mw_bbv !== null) {
+        header('Content-Type: application/x-download');
+        header('Content-Disposition: attachment; filename="' . $mw_bbv[0] . '"');
+        echo $mw_bbv[1];
+        exit;
+    }
+    $mw_fehler[] = mw_e(mo_t('TEXT.EB_S5_KEINE'));
     $mw_tab = 'tab-loxone';
 }
 
@@ -368,6 +383,8 @@ if ($mw_ist_post && isset($_POST['bladereset'])) {
             $mw_cfg = mo_config();
         } elseif ($mw_bgrund === 'nicht_erreichbar') {
             $mw_fehler[] = sprintf(mo_t('TEXT.MESSER_NICHT_ERREICHBAR'), mw_e($mw_btext));
+        } elseif ($mw_bgrund === 'stunden_fehlt') {
+            $mw_fehler[] = mo_t('TEXT.MESSER_STUNDEN_FEHLT');   // 1.1.24, Entwurf rb E2
         } elseif ($mw_bgrund === 'nicht_eingerichtet') {
             $mw_fehler[] = sprintf(mo_t('TEXT.MESSER_NICHT_EINGERICHTET'), (int) $mw_br);
         } else {
@@ -417,6 +434,9 @@ if ($mw_ist_post && isset($_POST['mqtt_save'])) {
     mo_nennform('formular');
     $mw_neu = $mw_cfg;
     $mw_neu['mqtt_enabled'] = isset($_POST['mqtt_enabled']) ? 1 : 0;
+    /* Gruppe 2 / MQTT (1.1.24): die beiden Haken der Befehlsbruecke (ab Werk aus). */
+    $mw_neu['befehle_mqtt_ein'] = isset($_POST['befehle_mqtt_ein']) ? 1 : 0;
+    $mw_neu['befehle_mqtt_steuern'] = isset($_POST['befehle_mqtt_steuern']) ? 1 : 0;
     /* Gegen DIESELBE Positivliste wie die Sicherung. Ein leeres oder fehlendes
      * Thema wird beanstandet, nicht still zu 'maeher' (C6, Nr. 19). */
     list($mw_wert, $mw_l) = mo_wert_pruefen('mqtt_topic', isset($_POST['mqtt_topic']) ? $_POST['mqtt_topic'] : '');
@@ -435,6 +455,13 @@ if ($mw_ist_post && isset($_POST['mqtt_save'])) {
             $mw_r = mo_mqtt_nach_aenderung($mw_alt_cfg, $mw_cfg);
             foreach ($mw_r['ok'] as $mw_m) { $mw_ok[] = $mw_m; }
             foreach ($mw_r['fehler'] as $mw_m) { $mw_fehler[] = $mw_m; }
+            /* Direktstart bzw. -stopp der Befehlsbruecke (Bauart FerienFeiertage 1.2.27): der Waechter im
+             * Minutenlauf startet nach einem Start hoechstens alle 600 s neu. */
+            list($mw_bbs, $mw_bbt) = mo_bruecke_schalten();
+            if ($mw_bbs === 'ein') { $mw_ok[] = mo_t('BEFEHL.M_EIN'); }
+            elseif ($mw_bbs === 'aus') { $mw_ok[] = mo_t('BEFEHL.M_AUS'); }
+            elseif ($mw_bbs === 'start_fehl') { $mw_warn[] = sprintf(mo_t('BEFEHL.M_START_FEHL'), mw_e(mo_kuerzen($mw_bbt, 200))); }
+            elseif ($mw_bbs === 'stop_fehl') { $mw_fehler[] = sprintf(mo_t('BEFEHL.M_STOP_FEHL'), mw_e(mo_kuerzen($mw_bbt, 200))); }
         } else {
             $mw_fehler[] = sprintf(mo_t('TEXT.FEHLER_SCHREIBEN'), mw_e($mw_cfgfile));
         }
@@ -793,7 +820,7 @@ $mw_kalt = $mw_lauf['ts'] > 0 ? time() - (int) $mw_lauf['ts'] : -1; ?>
   <div class="sm-kachel"><b><?php echo mw_e($mw_s['text']); ?></b><?php echo mw_e(mo_t('TEXT.K_ZUSTAND')); ?></div>
   <div class="sm-kachel"><b><?php echo (int) $mw_s['batterie']; ?>&nbsp;%</b><?php echo mw_e(mo_t('TEXT.K_AKKU')); ?></div>
   <div class="sm-kachel"><b><?php echo mw_e($mw_s['modus_text']); ?></b><?php echo mw_e(mo_t('TEXT.K_MODUS')); ?></div>
-  <div class="sm-kachel"><b><?php echo (int) $mw_s['stunden']; ?>&nbsp;h</b><?php echo mw_e(mo_t('TEXT.K_STUNDEN')); ?></div>
+  <div class="sm-kachel"><b><?php echo $mw_s['stunden'] >= 0 ? (int) $mw_s['stunden'] . '&nbsp;h' : '&ndash;'; ?></b><?php echo mw_e(mo_t('TEXT.K_STUNDEN')); ?></div>
   <div class="sm-kachel"><b><?php echo $mw_s['messer_rest'] >= 0 ? (int) $mw_s['messer_rest'] . '&nbsp;h' : '&ndash;'; ?></b><?php echo mw_e(mo_t('TEXT.K_MESSER')); ?></div>
   <div class="sm-kachel"><b><?php echo mw_e($mw_s['temperatur']); ?>&nbsp;&deg;C</b><?php echo mw_e(mo_t('TEXT.K_TEMP')); ?></div>
   <div class="sm-kachel"><b><?php echo (int) $mw_s['wlan']; ?>&nbsp;dBm</b><?php echo mw_e(mo_t('TEXT.K_WLAN')); ?></div>
@@ -801,7 +828,7 @@ $mw_kalt = $mw_lauf['ts'] > 0 ? time() - (int) $mw_lauf['ts'] : -1; ?>
 <?php if ($mw_s['fehler']) { ?>
 <div class="sm-warnung"><b><?php echo sprintf(mw_e(mo_t('TEXT.K_FEHLER')), (int) $mw_s['fehler']); ?></b> <?php echo mw_e($mw_s['fehlertext']); ?></div>
 <?php } ?>
-<?php if ($mw_s['messer_warn']) { ?>
+<?php if ((int) $mw_s['messer_warn'] === 1) { /* -1 = nicht bekannt (1.1.24) */ ?>
 <div class="sm-warnung"><?php echo mw_e(mo_t('TEXT.K_MESSER_FAELLIG')); ?></div>
 <?php } ?>
 <?php } else { ?>
@@ -1019,6 +1046,18 @@ if (!empty($mw_cfg['mqtt_enabled']) && mo_mqtt_gateway_autostart() === false) { 
     <input data-role="none" type="text" name="mqtt_topic"<?php echo mw_falsch('mqtt_topic'); ?> value="<?php echo mw_e(mw_wert('mqtt', 'mqtt_topic', $mw_cfg['mqtt_topic'])); ?>" placeholder="maeher">
 </div>
 <div class="sm-hilfe"><?php echo mo_t('TEXT.MQTT_WECHSEL_HILFE'); ?></div>
+<?php /* Gruppe 2 / MQTT (1.1.24, Entwurf rb 3.3): die Befehlsbruecke - zwei Haken, beide ab Werk aus. */ ?>
+<h2><?php echo mw_e(mo_t('BEFEHL.H_BEFEHLE')); ?></h2>
+<label style="display:inline-flex;align-items:center;gap:6px;">
+    <input data-role="none" type="checkbox" name="befehle_mqtt_ein"<?php echo mw_haken('mqtt', 'befehle_mqtt_ein', $mw_cfg['befehle_mqtt_ein']) ? ' checked' : ''; ?>> <?php echo mw_e(mo_t('BEFEHL.HAKEN_EIN')); ?>
+</label>
+<label style="display:inline-flex;align-items:center;gap:6px;">
+    <input data-role="none" type="checkbox" name="befehle_mqtt_steuern"<?php echo mw_haken('mqtt', 'befehle_mqtt_steuern', $mw_cfg['befehle_mqtt_steuern']) ? ' checked' : ''; ?>> <?php echo mw_e(mo_t('BEFEHL.HAKEN_STEUERN')); ?>
+</label>
+<div class="sm-hilfe"><?php echo mw_e(mo_t('BEFEHL.HAKEN_HILFE')); ?></div>
+<?php if (!empty($mw_cfg['befehle_mqtt_ein']) && empty($mw_cfg['mqtt_enabled'])) { ?>
+<div class="sm-warnung"><?php echo mw_e(mo_t('BEFEHL.HAKEN_MQTT_AUS')); ?></div>
+<?php } ?>
 <div class="sm-legende">
 <span><i class="sm-punkt sm-b-aktion"></i> <?php echo mw_e(mo_t('LEGENDE.AKTION')); ?></span>
 </div>
@@ -1093,14 +1132,298 @@ foreach ($mw_themen['maeher'] as $mw_th) {
 <!-- ================= Einbindung in Loxone ================= -->
 <div class="sm-seite<?php echo $mw_tab === 'tab-loxone' ? ' sm-active' : ''; ?>" id="tab-loxone">
 <h2><?php echo mw_e(mo_t('TEXT.EINBINDUNG_IN_LOXONE_SCHRITT_FR_SC')); ?></h2>
-<?php /* A30b (06.09.2026): hier standen ZWEI Legenden im selben Reiter, jede
-       * unvollstaendig - eine beim Token (nur Aktion), eine bei der Vorlage
-       * (nur Technik). Die uebrigen vier Reiter fuehren je eine. Jetzt eine
-       * gesammelte, oben, mit beiden Punkten. */ ?>
+<?php /* Gruppe 2 / MQTT (1.1.24; Entwurf rb 2.4, Bauvorschrift Gruppe 1 Nachtrag 2, Hausherr 19.10.2026): MQTT ist der
+   Weg des LoxBerry-Plugins Musterprojekts. Schritt 1 MQTT einschalten (mit Zustand), Schritt 2 das Gateway nach seiner
+   Fassung (V1: das Plugin bringt sein Abo selbst mit; V2 und "nicht feststellbar": Hakenliste aus mo_mqtt_hakenliste(),
+   aufgeklappt), Schritt 3 die Namenstabelle (KEINE Importvorlage fuer Werte), Schritt 4 die Ausfallerkennung am
+   Lebenszeichen status/zaehler (ohne Alter aus einem Zeitstempel), Schritt 5 die Befehle aus der Befehlsbruecke
+   (bb_liste(), EINE Quelle mit der Vorlage "Rasenmaeher MQTT-Befehle"), Schritt 6 die beiden Musterseiten. Der Weg ueber
+   HTTP (bis 1.1.23 die Schritte 1 bis 7 dieses Reiters) steht unveraendert darunter, zugeklappt. Alle Namen aus
+   mo_mqtt_gateway_name(). */
+$mw_gpraefix = mo_mqtt_praefix($mw_cfg['mqtt_topic']);
+$mw_namen = mo_mqtt_namen(1);
+$mw_haken = mo_mqtt_hakenliste(1);
+$mw_haken_nc = 0;
+foreach ($mw_haken as $mw_hz) { if ($mw_hz[4]) { $mw_haken_nc++; } }
+$mw_bliste = mo_befehle_liste(); ?>
 <div class="sm-legende">
 <span><i class="sm-punkt sm-b-technik"></i> <?php echo mw_e(mo_t('LEGENDE.TECHNIK')); ?></span>
 <span><i class="sm-punkt sm-b-aktion"></i> <?php echo mw_e(mo_t('LEGENDE.AKTION')); ?></span>
 </div>
+
+<div class="sm-step"><b><?php echo mw_e(mo_t('TEXT.EB_S1')); ?></b><br>
+<?php echo mo_t('TEXT.EB_S1_TEXT'); ?>
+<?php if (!empty($mw_cfg['mqtt_enabled'])) { ?>
+<div class="sm-hinweis"><?php echo sprintf(mo_t('TEXT.EB_S1_EIN'), '<span class="sm-mono">' . mw_e($mw_gpraefix) . '/…</span>'); ?></div>
+<?php } else { ?>
+<div class="sm-warnung"><?php echo mo_t('TEXT.EB_S1_AUS'); ?></div>
+<?php } ?>
+</div>
+
+<div class="sm-step"><b><?php echo mw_e(mo_t('TEXT.EB_S2')); ?></b><br>
+<?php if ($mw_gwf < 2) { /* V1 oder nicht feststellbar: das Abo (mo_abo_datei(), mo_abo_text() wie im Reiter MQTT) */ ?>
+<div class="<?php echo $mw_abo_klasse; ?>">
+<span class="sm-mono"><?php echo mw_e($mw_gpraefix); ?>/#</span><br>
+<?php echo $mw_abo_html; ?>
+</div>
+<?php } ?>
+<?php if ($mw_gwf !== 1) { /* V2 oder nicht feststellbar: die Hakenliste, aufgeklappt */ ?>
+<div class="sm-hinweis"><?php echo mo_t('TEXT.EB_S2_V2'); ?></div>
+<details open><summary><?php echo mw_e(sprintf(mo_t('TEXT.EB_HAKEN_AUF'), count($mw_haken), $mw_haken_nc)); ?></summary>
+<div class="sm-breit"><table class="sm-tbl">
+<tr><th style="width:34px;">#</th><th><?php echo mw_e(mo_t('TEXT.EB_T_THEMA')); ?></th><th><?php echo mw_e(mo_t('TEXT.EB_T_NAME')); ?></th><th><?php echo mw_e(mo_t('TEXT.EB_T_BEDEUTUNG')); ?></th><th><?php echo mw_e(mo_t('TEXT.EB_T_ART')); ?></th></tr>
+<?php foreach ($mw_haken as $mw_hi => $mw_hz) { ?>
+<tr><td><?php echo (int) $mw_hi + 1; ?></td><td><span class="sm-mono"><?php echo mw_e($mw_hz[0]); ?></span><?php echo $mw_hz[4] ? ' <b>' . mw_e(mo_t('TEXT.EB_NONCACHED')) . '</b>' : ''; ?></td><td><span class="sm-mono"><?php echo mw_e($mw_hz[1]); ?></span></td><td><?php echo mw_e($mw_hz[2]); ?></td><td><?php echo mw_e(mo_t($mw_hz[3] === 'text' ? 'TEXT.EB_ART_TEXT' : 'TEXT.EB_ART_ZAHL')); ?></td></tr>
+<?php } ?>
+</table></div>
+</details>
+<?php } ?>
+<div class="sm-hilfe"><?php echo mw_e(mo_t('TEXT.EB_NEUSTART')); ?></div>
+<?php if (count(mo_mowers()) > 1) { ?>
+<div class="sm-hilfe"><?php echo mw_e(sprintf(mo_t('TEXT.EB_WEITERE'), count(mo_mqtt_hakenliste(2)))); ?></div>
+<?php } ?>
+</div>
+
+<div class="sm-step"><b><?php echo mw_e(mo_t('TEXT.EB_S3')); ?></b><br>
+<?php echo mo_t('TEXT.EB_S3_TEXT'); ?>
+<div class="sm-breit"><table class="sm-tbl">
+<tr><th style="width:34px;">#</th><th><?php echo mw_e(mo_t('TEXT.EB_T_NAME')); ?></th><th><?php echo mw_e(mo_t('TEXT.EB_T_THEMA')); ?></th><th><?php echo mw_e(mo_t('TEXT.EB_T_BEDEUTUNG')); ?></th><th><?php echo mw_e(mo_t('TEXT.EB_T_BEREICH')); ?></th><th><?php echo mw_e(mo_t('TEXT.EB_T_ART')); ?></th><th><?php echo mw_e(mo_t('TEXT.EB_T_MUSTER')); ?></th></tr>
+<?php foreach ($mw_namen as $mw_ni => $mw_nz) { ?>
+<tr><td><?php echo (int) $mw_ni + 1; ?></td><td><span class="sm-mono"><?php echo mw_e($mw_nz['name']); ?></span> <button data-role="none" type="button" class="sm-kopie" data-kopie="<?php echo mw_e($mw_nz['name']); ?>"><?php echo mw_e(mo_t('TEXT.EB_KOPIEREN')); ?></button></td><td><span class="sm-mono"><?php echo mw_e($mw_gpraefix . '/' . $mw_nz['thema']); ?></span></td><td><?php echo mw_e($mw_nz['bedeutung']); ?></td><td><?php echo $mw_nz['art'] === 'text' ? '&ndash;' : mw_e($mw_nz['bereich']); ?></td><td><?php echo mw_e(mo_t($mw_nz['art'] === 'text' ? 'TEXT.EB_ART_TEXT' : 'TEXT.EB_ART_ZAHL')); ?></td><td><?php echo mw_e(mo_t($mw_nz['im_muster'] ? 'TEXT.JA' : 'TEXT.NEIN')); ?></td></tr>
+<?php } ?>
+</table></div>
+<div class="sm-hilfe"><?php echo mw_e(mo_t('TEXT.EB_S3_DIGITAL')); ?></div>
+<div class="sm-hilfe"><?php echo mw_e(mo_t('TEXT.EB_S3_RECHTE')); ?></div>
+<div class="sm-hilfe"><?php echo mw_e(mo_t('TEXT.EB_S3_MUSTER')); ?></div>
+<script>
+(function () {
+    document.querySelectorAll('.sm-kopie').forEach(function (k) {
+        k.addEventListener('click', function () {
+            var n = k.getAttribute('data-kopie');
+            var fertig = function () { k.textContent = <?php echo json_encode(mo_t('TEXT.EB_KOPIERT')); ?>; };
+            if (navigator.clipboard && window.isSecureContext) {
+                navigator.clipboard.writeText(n).then(fertig);
+            } else {
+                var f = document.createElement('textarea');
+                f.value = n; document.body.appendChild(f); f.select();
+                try { document.execCommand('copy'); fertig(); } catch (e) {}
+                document.body.removeChild(f);
+            }
+        });
+    });
+})();
+</script>
+</div>
+
+<div class="sm-step"><b><?php echo mw_e(mo_t('TEXT.EB_S4')); ?></b><br>
+<?php echo sprintf(mo_t('TEXT.EB_S4_TEXT'), '<span class="sm-mono">' . mw_e(mo_mqtt_gateway_name('status/zaehler')) . '</span>',
+                   '<span class="sm-mono">' . mw_e(mo_mqtt_gateway_name('ok')) . '</span>'); ?>
+</div>
+
+<div class="sm-step"><b><?php echo mw_e(mo_t('TEXT.EB_S5')); ?></b><br>
+<?php echo mo_t('TEXT.EB_S5_TEXT'); ?>
+<?php if ($mw_bliste === null) { ?>
+<div class="sm-warnung"><?php echo mw_e(mo_t('TEXT.EB_S5_KEINE')); ?></div>
+<?php } else { ?>
+<div class="sm-breit"><table class="sm-tbl">
+<tr><th><?php echo mw_e(mo_t('BEFEHL.T_BEDEUTUNG')); ?></th><th><?php echo mw_e(mo_t('BEFEHL.T_TITEL')); ?></th><th><?php echo mw_e(mo_t('BEFEHL.T_THEMA')); ?></th><th><?php echo mw_e(mo_t('BEFEHL.T_LOXONE')); ?></th><th><?php echo mw_e(mo_t('BEFEHL.T_EINGREIFEND')); ?></th><th><?php echo mw_e(mo_t('BEFEHL.T_SPERRE')); ?></th></tr>
+<?php foreach ($mw_bliste['befehle'] as $mw_bb) { if ($mw_bb['muster']) { continue; } ?>
+<tr><td><?php echo mw_e(mo_t($mw_bb['kachel'])); ?></td><td><?php echo mw_e($mw_bb['titel']); ?></td><td><span class="sm-mono"><?php echo mw_e($mw_bb['thema']); ?></span></td><td><span class="sm-mono"><?php echo mw_e($mw_bb['loxone']['ein']); ?></span></td><td><?php echo mw_e(mo_t($mw_bb['eingreifend'] ? 'TEXT.JA' : 'TEXT.NEIN')); ?></td><td><?php echo (int) $mw_bb['sperre_s']; ?> s</td></tr>
+<?php } ?>
+</table></div>
+<div class="sm-hilfe"><?php echo mw_e(mo_t('BEFEHL.T_QUITTUNG')); ?>: <span class="sm-mono"><?php echo mw_e($mw_gpraefix); ?>/befehl/…/quittung</span> – <?php echo mw_e(mo_t('BEFEHL.Q_AUSGEFUEHRT')); ?></div>
+<div class="sm-hilfe"><?php echo mw_e(mo_t('TEXT.EB_S5_ANTWORT')); ?></div>
+<div class="sm-hilfe"><?php echo sprintf(mo_t('TEXT.EB_S5_MEHR'), '<span class="sm-mono">' . mw_e($mw_gpraefix) . '/befehl/&lt;n&gt;/&lt;…&gt;</span>'); ?></div>
+<div class="sm-knopfreihe">
+<form action="index.php" method="post">
+  <?php echo mo_fmt_feld(); ?>
+  <input data-role="none" type="hidden" name="activetab" value="tab-loxone">
+  <button data-role="none" class="sm-btn sm-b-technik" type="submit" name="vorlage_bb" value="1"><?php echo mw_e(mo_t('BEFEHL.K_VORLAGE')); ?></button>
+</form>
+</div>
+<div class="sm-hilfe"><?php echo mw_e(mo_t('TEXT.EB_S5_VORLAGE')); ?></div>
+<?php } ?>
+</div>
+
+<div class="sm-step"><b><?php echo mw_e(mo_t('TEXT.SCHRITT_6_BAUSTEINE')); ?></b><br>
+<?php /* Welle Bild 10 VOLL (1.1.22, Hausherr 11.10.2026: Vollausstattung, ein Laie soll das Maximum leicht uebernehmen
+         koennen): ZWEI Seiten aus Musterprojekt/baustein_listen.txt - je Seite Ueberschrift, Kasten "So uebernehmen Sie
+         diese Seite", Tabelle, Hinweise, Bild, Link. Gruppe 2 / MQTT (1.1.24): die Listen vom 19.10.2026 (Robonect 44,
+         Robonect Steuerung 52 Zeilen; Frostsperre mit Schalter, Sperre ueber Mitternacht, Wiederaufnahme nur nach
+         Sperre, Befehlsweg). Eingaenge sind Virtuelle Eingaenge mit dem Namen des MQTT-Gateways (mo_mqtt_gateway_name()),
+         Befehle stehen am Ausgang "LoxBerry MQTT-Gateway"; die HTTP-Vorlagen werden fuer die Liste nicht mehr gelesen.
+         Zeile: array(Kennung, Typ, Name, Parameter, Verbindung); Name array('N', thema) = Gateway-Name, sonst ein
+         Schluessel in [BAUSTEIN]. Platzhalter: {Bn}/{Sn} -> "#n" der eigenen Seite, {L:ABSCHNITT.SCHLUESSEL}
+         Beschriftung der Oberflaeche, {N:thema} Gateway-Name, {P} Themenpraefix. Die Zeilen entstehen aus derselben
+         Liste wie die Sprachdateien (vb_g2_rb_bau_skripte/g2_zeilen.py). */
+$mw_bs_mono = function ($s) { return '<span class="sm-mono">' . mw_e($s) . '</span>'; };
+$mw_bs_seiten = array(
+    array(
+        'titel'    => mo_t('BAUSTEIN.UE_WERTE'),
+        'seite'    => 'Robonect',
+        'bild'     => 'einbindung_loxone_werte.png',
+        'schritte' => array('A_S1', 'A_S2', 'A_S3', 'A_S4', 'A_S5', 'A_S6', 'A_S7', 'A_S8', 'A_S9', 'A_S10'),
+        'hinweise' => array('H_AWV', 'H_ODER', 'H_PUSH', 'H_HEIM', 'H_MESSER', 'H_DOPPELT', 'H_ANZEIGE', 'H_MINUS1', 'H_SCHLEIFE', 'ERLAEUTERUNG'),
+        'zeilen'   => array(
+            array('B1', 'T_VI_GW', array('N', 'code'), 'B1_PARAM', 'V_KEINE'),
+            array('B2', 'T_VI_GW', array('N', 'batterie'), 'B2_PARAM', 'V_KEINE'),
+            array('B3', 'T_VI_GW', array('N', 'fehler'), 'B3_PARAM', 'V_KEINE'),
+            array('B4', 'T_VI_GW', array('N', 'ann'), 'B4_PARAM', 'V_KEINE'),
+            array('B5', 'T_VI_GW', array('N', 'push'), 'B5_PARAM', 'V_KEINE'),
+            array('B6', 'T_VI_GW', array('N', 'ok'), 'B6_PARAM', 'V_KEINE'),
+            array('B7', 'T_VI_GW', array('N', 'status/zaehler'), 'B7_PARAM', 'V_KEINE'),
+            array('B8', 'T_KONST', 'B8_NAME', 'B8_PARAM', 'V_KEINE'),
+            array('B9', 'T_STATUS', 'B9_NAME', 'B9_PARAM', 'B9_VERB'),
+            array('B10', 'T_UND', 'B10_NAME', 'P_KEINE', 'B10_VERB'),
+            array('B11', 'T_BENACH', 'B11_NAME', 'P_FREI', 'B11_VERB'),
+            array('B12', 'T_NICHT', 'B12_NAME', 'P_KEINE', 'B12_VERB'),
+            array('B13', 'T_AWV', 'B13_NAME', 'B13_PARAM', 'B13_VERB'),
+            array('B14', 'T_ODER', 'B14_NAME', 'P_KEINE', 'B14_VERB'),
+            array('B15', 'T_ODER', 'B15_NAME', 'P_KEINE', 'B15_VERB'),
+            array('B16', 'T_EINVERZ', 'B16_NAME', 'B16_PARAM', 'B16_VERB'),
+            array('B17', 'T_BENACH', 'B17_NAME', 'P_FREI', 'B17_VERB'),
+            array('B18', 'T_TASTER', 'B18_NAME', 'P_APP', 'V_KEINE'),
+            array('B19', 'T_VQ_GW', 'B19_NAME', 'B19_PARAM', 'B19_VERB'),
+            array('B20', 'T_VI_GW', array('N', 'maeht'), 'B20_PARAM', 'V_KEINE'),
+            array('B21', 'T_VI_GW', array('N', 'stunden'), 'B21_PARAM', 'V_KEINE'),
+            array('B22', 'T_VI_GW', array('N', 'messer_rest'), 'B22_PARAM', 'V_KEINE'),
+            array('B23', 'T_VI_GW', array('N', 'messer_warn'), 'B23_PARAM', 'V_KEINE'),
+            array('B24', 'T_STATUS', 'B24_NAME', 'B24_PARAM', 'B24_VERB'),
+            array('B25', 'T_BENACH', 'B25_NAME', 'B25_PARAM', 'B25_VERB'),
+            array('B26', 'T_TASTER', 'B26_NAME', 'B26_PARAM', 'V_KEINE'),
+            array('B27', 'T_VQ_GW', 'B27_NAME', 'B27_PARAM', 'B27_VERB'),
+            array('B28', 'T_VI_GW', array('N', 'temperatur'), 'B28_PARAM', 'V_KEINE'),
+            array('B29', 'T_VI_GW', array('N', 'feuchte'), 'B29_PARAM', 'V_KEINE'),
+            array('B30', 'T_VI_GW', array('N', 'wlan'), 'B30_PARAM', 'V_KEINE'),
+            array('B31', 'T_STATUS', 'B31_NAME', 'B31_PARAM', 'B31_VERB'),
+            array('B32', 'T_VI_GW', array('N', 'fehleralter'), 'B32_PARAM', 'V_KEINE'),
+            array('B33', 'T_STATUS', 'B33_NAME', 'B33_PARAM', 'B33_VERB'),
+            array('B34', 'T_GLEICH', 'B34_NAME', 'B34_PARAM', 'B34_VERB'),
+            array('B35', 'T_BENACH', 'B35_NAME', 'B35_PARAM', 'B35_VERB'),
+            array('B36', 'T_SCHWELL', 'B36_NAME', 'B36_PARAM', 'B36_VERB'),
+            array('B37', 'T_UND', 'B37_NAME', 'B37_PARAM', 'B37_VERB'),
+            array('B38', 'T_BENACH', 'B38_NAME', 'B38_PARAM', 'B38_VERB'),
+            array('B39', 'T_VI_GW', array('N', 'ptest'), 'B39_PARAM', 'V_KEINE'),
+            array('B40', 'T_BENACH', 'B40_NAME', 'B40_PARAM', 'B40_VERB'),
+            array('B41', 'T_VI_GW', array('N', 'audio'), 'B41_PARAM', 'V_KEINE'),
+            array('B42', 'T_STATUS', 'B42_NAME', 'B42_PARAM', 'B42_VERB'),
+            array('B43', 'T_EINVERZ', 'B43_NAME', 'B43_PARAM', 'B43_VERB'),
+            array('B44', 'T_TEXTEIN', array('N', 'status'), 'B44_PARAM', 'V_KEINE'),
+        ),
+    ),
+    array(
+        'titel'    => mo_t('BAUSTEIN.UE_STEUERUNG'),
+        'seite'    => 'Robonect Steuerung',
+        'bild'     => 'einbindung_loxone_steuerung.png',
+        'schritte' => array('B_S1', 'B_S2', 'B_S3', 'B_S4', 'B_S5', 'B_S6', 'B_S7'),
+        'hinweise' => array('H_SPERREN', 'H_MITTERNACHT', 'H_FROST', 'H_WINTER', 'H_ZEITEN', 'H_ANHALTEN', 'H_STATISTIK', 'H_BEFEHLE'),
+        'zeilen'   => array(
+            array('S1', 'T_VI_GW', array('N', 'modus'), 'S1_PARAM', 'V_KEINE'),
+            array('S2', 'T_VI_GW', array('N', 'timer'), 'S2_PARAM', 'V_KEINE'),
+            array('S3', 'T_STATUS', 'S3_NAME', 'S3_PARAM', 'S3_VERB'),
+            array('S4', 'T_VI_GW', array('N', 'maeht'), 'S4_PARAM', 'V_KEINE'),
+            array('S5', 'T_VI_GW', array('N', 'laedt'), 'S5_PARAM', 'V_KEINE'),
+            array('S6', 'T_VI_GW', array('N', 'dauer'), 'S6_PARAM', 'V_KEINE'),
+            array('S7', 'T_STATUS', 'S7_NAME', 'S7_PARAM', 'S7_VERB'),
+            array('S8', 'T_VI_GW', array('N', 'einsheute'), 'S8_PARAM', 'V_KEINE'),
+            array('S9', 'T_VI_GW', array('N', 'minheute'), 'S9_PARAM', 'V_KEINE'),
+            array('S10', 'T_VI_GW', array('N', 'einswoche'), 'S10_PARAM', 'V_KEINE'),
+            array('S11', 'T_VI_GW', array('N', 'minwoche'), 'S11_PARAM', 'V_KEINE'),
+            array('S12', 'T_STATUS', 'S12_NAME', 'S12_PARAM', 'S12_VERB'),
+            array('S13', 'T_TASTER', 'S13_NAME', 'P_APP', 'V_KEINE'),
+            array('S14', 'T_VQ_GW', 'S14_NAME', 'S14_PARAM', 'S14_VERB'),
+            array('S15', 'T_TASTER', 'S15_NAME', 'S15_PARAM', 'V_KEINE'),
+            array('S16', 'T_VQ_GW', 'S16_NAME', 'S16_PARAM', 'S16_VERB'),
+            array('S17', 'T_TASTER', 'S17_NAME', 'P_APP', 'V_KEINE'),
+            array('S18', 'T_VQ_GW', 'S18_NAME', 'S18_PARAM', 'S18_VERB'),
+            array('S19', 'T_SCHALTER', 'S19_NAME', 'S19_PARAM', 'V_KEINE'),
+            array('S20', 'T_AUSVERZ', 'S20_NAME', 'S20_PARAM', 'S20_VERB'),
+            array('S21', 'T_SCHALTUHR', 'S21_NAME', 'S21_PARAM', 'V_KEINE'),
+            array('S22', 'T_SCHALTER', 'S22_NAME', 'S22_PARAM', 'V_KEINE'),
+            array('S23', 'T_ODER', 'S23_NAME', 'P_KEINE', 'S23_VERB'),
+            array('S24', 'T_SCHALTER', 'S24_NAME', 'S24_PARAM', 'V_KEINE'),
+            array('S25', 'T_UND', 'S25_NAME', 'P_KEINE', 'S25_VERB'),
+            array('S26', 'T_FLANKE', 'S26_NAME', 'S26_PARAM', 'S26_VERB'),
+            array('S27', 'T_TASTER', 'S27_NAME', 'S27_PARAM', 'V_KEINE'),
+            array('S28', 'T_ODER', 'S28_NAME', 'S28_PARAM', 'S28_VERB'),
+            array('S29', 'T_VQ_GW', 'S29_NAME', 'S29_PARAM', 'S29_VERB'),
+            array('S30', 'T_TASTER', 'S30_NAME', 'S30_PARAM', 'V_KEINE'),
+            array('S31', 'T_ODER', 'S31_NAME', 'S31_PARAM', 'S31_VERB'),
+            array('S32', 'T_VQ_GW', 'S32_NAME', 'S32_PARAM', 'S32_VERB'),
+            array('S33', 'T_STATUS', 'S33_NAME', 'S33_PARAM', 'S33_VERB'),
+            array('S34', 'T_ODER', 'S34_NAME', 'S34_PARAM', 'S34_VERB'),
+            array('S35', 'T_VI', 'S35_NAME', 'S35_PARAM', 'V_KEINE'),
+            array('S36', 'T_SCHWELL', 'S36_NAME', 'S36_PARAM', 'S36_VERB'),
+            array('S37', 'T_SCHALTER', 'S37_NAME', 'S37_PARAM', 'V_KEINE'),
+            array('S38', 'T_AUSVERZ', 'S38_NAME', 'S38_PARAM', 'S38_VERB'),
+            array('S39', 'T_ODER', 'S39_NAME', 'S39_PARAM', 'S39_VERB'),
+            array('S40', 'T_ODER', 'S40_NAME', 'S40_PARAM', 'S40_VERB'),
+            array('S41', 'T_REGLER', 'S41_NAME', 'S41_PARAM', 'V_KEINE'),
+            array('S42', 'T_FORMEL', 'S42_NAME', 'S42_PARAM', 'S42_VERB'),
+            array('S43', 'T_ODER', 'S43_NAME', 'S43_PARAM', 'S43_VERB'),
+            array('S44', 'T_RS', 'S44_NAME', 'S44_PARAM', 'S44_VERB'),
+            array('S45', 'T_UND', 'S45_NAME', 'S45_PARAM', 'S45_VERB'),
+            array('S46', 'T_IMPULS', 'S46_NAME', 'S46_PARAM', 'V_KEINE'),
+            array('S47', 'T_UND', 'S47_NAME', 'S47_PARAM', 'S47_VERB'),
+            array('S48', 'T_ODER', 'S48_NAME', 'S48_PARAM', 'S48_VERB'),
+            array('S49', 'T_VI_GW', array('N', 'status/befehle'), 'S49_PARAM', 'V_KEINE'),
+            array('S50', 'T_STATUS', 'S50_NAME', 'S50_PARAM', 'S50_VERB'),
+            array('S51', 'T_SCHALTER', 'S51_NAME', 'S51_PARAM', 'V_KEINE'),
+            array('S52', 'T_UND', 'S52_NAME', 'S52_PARAM', 'S52_VERB'),
+        ),
+    ),
+);
+$mw_bs_nr = array();
+foreach ($mw_bs_seiten as $mw_bs_s) {
+    foreach ($mw_bs_s['zeilen'] as $mw_bs_i => $mw_bs_z) { $mw_bs_nr[$mw_bs_z[0]] = $mw_bs_i + 1; }
+}
+$mw_bs_t = function ($schluessel) use ($mw_bs_nr, $mw_bs_mono, $mw_gpraefix) {
+    $s = (string) mo_t('BAUSTEIN.' . $schluessel);
+    return preg_replace_callback('/\{([BS]\d+|L:[A-Z]+\.[A-Z0-9_]+|N:[a-z0-9_\/]+|P)\}/', function ($m) use ($mw_bs_nr, $mw_bs_mono, $mw_gpraefix) {
+        if (isset($mw_bs_nr[$m[1]])) { return '#' . $mw_bs_nr[$m[1]]; }
+        if ($m[1] === 'P') { return mw_e($mw_gpraefix); }
+        if (strncmp($m[1], 'N:', 2) === 0) { return $mw_bs_mono(mo_mqtt_gateway_name(substr($m[1], 2))); }
+        if (strncmp($m[1], 'L:', 2) === 0) { return mw_e(mo_t(substr($m[1], 2))); }
+        return $m[0];
+    }, $s);
+}; ?>
+<?php echo $mw_bs_t('TEXT'); ?>
+<?php foreach ($mw_bs_seiten as $mw_bs_s) { ?>
+<h3><?php echo mw_e($mw_bs_s['titel']); ?></h3>
+<div class="sm-hinweis"><b><?php echo mw_e(mo_t('BAUSTEIN.SO_TITEL')); ?></b>
+<ol>
+<?php foreach ($mw_bs_s['schritte'] as $mw_bs_k) { ?>
+<li><?php echo $mw_bs_t($mw_bs_k); ?></li>
+<?php } ?>
+</ol>
+</div>
+<div class="sm-breit">
+<table class="sm-tbl">
+<tr><th>#</th><th><?php echo mw_e(mo_t('BAUSTEIN.T_TYP')); ?></th><th><?php echo mw_e(mo_t('BAUSTEIN.T_NAME')); ?></th><th><?php echo mw_e(mo_t('BAUSTEIN.T_PARAM')); ?></th><th><?php echo mw_e(mo_t('BAUSTEIN.T_VERB')); ?></th></tr>
+<?php foreach ($mw_bs_s['zeilen'] as $mw_bs_i => $mw_bs_z) { ?>
+<tr><td><?php echo $mw_bs_i + 1; ?></td><td><?php echo $mw_bs_t($mw_bs_z[1]); ?></td><td><span class="sm-mono"><?php echo is_array($mw_bs_z[2]) ? mw_e(mo_mqtt_gateway_name($mw_bs_z[2][1])) : $mw_bs_t($mw_bs_z[2]); ?></span></td><td><?php echo $mw_bs_t($mw_bs_z[3]); ?></td><td><?php echo $mw_bs_t($mw_bs_z[4]); ?></td></tr>
+<?php } ?>
+</table>
+</div>
+<p class="sm-hilfe"><b><?php echo mw_e(mo_t('BAUSTEIN.H_TITEL')); ?></b></p>
+<ul class="sm-hilfe">
+<?php foreach ($mw_bs_s['hinweise'] as $mw_bs_k) { ?>
+<li><?php echo $mw_bs_t($mw_bs_k); ?></li>
+<?php } ?>
+</ul>
+<figure class="sm-bild">
+<img src="<?php echo mw_e($mw_bs_s['bild']); ?>" alt="<?php echo mw_e(sprintf(mo_t('TEXT.BILD_ALT'), $mw_bs_s['titel'])); ?>" loading="lazy">
+<figcaption><?php echo mw_e(sprintf(mo_t('TEXT.BILD_UNTERSCHRIFT'), $mw_bs_s['seite'])); ?></figcaption>
+</figure>
+<div class="sm-small"><?php echo mo_t('TEXT.MUSTERPROJEKT'); ?></div>
+<?php } ?>
+</div>
+
+<?php /* Gruppe 2 / MQTT (1.1.24): der Weg ueber HTTP fuer bestehende Anlagen - bis 1.1.23 die Schritte 1, 3, 4, 5, 7,
+   Token und die beiden Vorlagen-Knoepfe dieses Reiters, Text und Tabellen unveraendert. Zugeklappt; alles bleibt im
+   Text der Seite (Suche, Druck). Das Abo (bisher Schritt 2) steht oben in Schritt 2. */ ?>
+<details class="sm-step"><summary><b><?php echo mw_e(mo_t('TEXT.EB_HTTP_TITEL')); ?></b></summary>
+<div class="sm-hilfe"><?php echo mw_e(mo_t('TEXT.EB_HTTP_TEXT')); ?></div>
 <p><?php echo mo_t('TEXT.DER_MINISERVER_FRAGT'); ?> <b><?php echo mw_e(mo_t('TEXT.EINE')); ?></b> <?php echo mo_t('TEXT.ADRESSE_OHNE_ZUGANGSDATEN_AB_UND_B'); ?></p>
 
 <div class="sm-step"><b><?php echo mw_e(mo_t('TEXT.SCHRITT_1_VIRTUELLER_HTTP_EINGANG_')); ?></b> <?php echo mw_e(sprintf(mo_t('TEXT.ABFRAGE_ALLE_S'), mo_polling())); ?>
@@ -1117,14 +1440,6 @@ foreach ($mw_ml as $mw_mn => $mw_mm) { ?>
 <tr><td><?php echo mw_e(mo_t('TEXT.ABFRAGEZYKLUS')); ?></td><td><?php echo mw_e(sprintf(mo_t('TEXT.SEKUNDEN_N'), mo_polling())); ?></td></tr>
 </table>
 <span class="sm-small"><?php echo mo_t('TEXT.DER_BISHERIGE_EINGANG_MIT'); ?> <span class="sm-mono">?user=...&amp;pass=...</span> <?php echo mw_e(mo_t('TEXT.KANN_DANACH_GELSCHT_WERDEN')); ?></span>
-</div>
-
-<div class="sm-step"><b><?php echo mw_e(mo_t('TEXT.SCHRITT_2_ABO')); ?></b><br>
-<?php echo mo_t('TEXT.SCHRITT_2_ABO_TEXT'); ?>
-<div class="<?php echo $mw_abo_klasse; ?>">
-<span class="sm-mono"><?php echo mw_e($mw_praefix); ?>/#</span><br>
-<?php echo $mw_abo_html; ?>
-</div>
 </div>
 
 <div class="sm-step"><b><?php echo mw_e(mo_t('TEXT.SCHRITT_3_BEFEHLSERKENNUNGEN')); ?></b>
@@ -1226,229 +1541,11 @@ foreach ($mw_befehle as $mw_b => $mw_bt) { ?>
 </form>
 </div>
 
-<div class="sm-step"><b><?php echo mw_e(mo_t('TEXT.SCHRITT_6_BAUSTEINE')); ?></b><br>
-<?php /* X-8 (02.10.2026, Entscheidung 36): Komplette Baustein-Liste in EINER
-         nummerierten Tabelle, eine Zeile je Baustein. Typ, Name, Parameter und
-         Verbindung stehen in [BAUSTEIN] der Sprachdateien. Vorlagen-Titel,
-         Adressen und Befehlstitel kommen aus DENSELBEN Funktionen wie die
-         Importvorlagen: mo_vorlage(1) und mo_vo_vorlage(1) werden gerufen und
-         ihre XML gelesen, nicht abgeschrieben.
-         Platzhalter: {Bn} -> "#n", {F:FELD} -> Titel des Eingangsbefehls zum
-         Feld, {A:befehl} -> Titel des Ausgangsbefehls zu ?cmd=befehl,
-         {T:VI}/{T:VO} -> Titel der Vorlage selbst (Typspalte).
-         Zeile: array(Kennung, Typ, Name, Parameter, Argumente, Verbindung);
-         ein Name als array(wert) steht woertlich da (Wert aus dem Code).
-         Welle Bild 8 (1.1.21, Entscheidung A): die Liste ist die im LoxBerry-Plugins
-         Musterprojekt in Loxone Config gebaute und mit leitungen_setzen.py verbundene
-         - eine Zeile = ein Baustein, fuer Maeher 1 wie die Vorlagen-Knoepfe ohne Auswahl.
-         Welle Bild 10 VOLL (1.1.22, Hausherr 11.10.2026: Vollausstattung, ein Laie soll
-         das Maximum leicht uebernehmen koennen): ZWEI Seiten aus
-         Musterprojekt/baustein_listen.txt, Abschnitte "Robonect" (42 Zeilen, Kennungen
-         B1..B42) und "Robonect Steuerung" (34 Zeilen, S1..S34); je Seite Ueberschrift,
-         Kasten "So uebernehmen Sie diese Seite", Tabelle, Hinweise, Bild, Link. {Bn}/{Sn}
-         -> "#n" der eigenen Seite. Weitere Platzhalter: {T:VI_DATEI}/{T:VO_DATEI}
-         Dateiname der Vorlage, {C:FELD} Befehlserkennung aus mo_check(),
-         {L:ABSCHNITT.SCHLUESSEL} Beschriftung der Oberflaeche (Knopf, Haken, Reiter).
-         Namen der Vorlagen-Zeilen aus den Vorlagen, nicht abgeschrieben. */
-$mw_bs_lesen = function ($xml) {
-    $w = function ($el, $attr) {
-        return preg_match('/\s' . $attr . '="([^"]*)"/', $el, $m)
-            ? html_entity_decode($m[1], ENT_QUOTES | ENT_XML1, 'UTF-8') : '';
-    };
-    $aus = array('titel' => '', 'adresse' => '', 'zyklus' => '', 'befehle' => array());
-    if (preg_match('/<(?:VirtualInHttp|VirtualOut)\s[^>]*>/', $xml, $m)) {
-        $aus['titel'] = $w($m[0], 'Title');
-        $aus['adresse'] = $w($m[0], 'Address');
-        $aus['zyklus'] = $w($m[0], 'PollingTime');
-    }
-    preg_match_all('/<(?:VirtualInHttpCmd|VirtualOutCmd)\s[^>]*>/', $xml, $mm);
-    foreach ($mm[0] as $el) {
-        $aus['befehle'][] = array('titel' => $w($el, 'Title'), 'check' => $w($el, 'Check'), 'ein' => $w($el, 'CmdOn'));
-    }
-    return $aus;
-};
-$mw_bs_xml = mo_vorlage(1);
-$mw_bs_vi = $mw_bs_lesen($mw_bs_xml[1]);
-$mw_bs_vi['datei'] = $mw_bs_xml[0];
-$mw_bs_xml = mo_vo_vorlage(1);
-$mw_bs_vo = $mw_bs_lesen($mw_bs_xml[1]);
-$mw_bs_vo['datei'] = $mw_bs_xml[0];
-$mw_bs_titel = array();
-foreach ($mw_bs_vi['befehle'] as $mw_bs_b) {
-    if (preg_match('/;([A-Z0-9_]+)=/', $mw_bs_b['check'], $mw_bs_m)) {
-        $mw_bs_titel['F:' . $mw_bs_m[1]] = $mw_bs_b['titel'];
-    }
-}
-/* Die vier Statistikfelder stehen nur mit dem Haken "Einsaetze und Maehdauer mitzaehlen" in der
- * Vorlage; ohne ihn kommt der Titel aus mo_vi_titel() - der Stelle, aus der mo_vorlage() ihn bildet. */
-foreach (array('EINSHEUTE', 'MINHEUTE', 'EINSWOCHE', 'MINWOCHE') as $mw_bs_sf) {
-    if (!isset($mw_bs_titel['F:' . $mw_bs_sf])) { $mw_bs_titel['F:' . $mw_bs_sf] = mo_vi_titel($mw_bs_sf, 1); }
-}
-foreach ($mw_bs_vo['befehle'] as $mw_bs_b) {
-    if (preg_match('/[?&]cmd=([^&]+)/', $mw_bs_b['ein'], $mw_bs_m)) {
-        $mw_bs_titel['A:' . rawurldecode($mw_bs_m[1])] = $mw_bs_b['titel'];
-    }
-}
-$mw_bs_titel['T:VI'] = $mw_bs_vi['titel'];
-$mw_bs_titel['T:VO'] = $mw_bs_vo['titel'];
-$mw_bs_titel['T:VI_DATEI'] = $mw_bs_vi['datei'];
-$mw_bs_titel['T:VO_DATEI'] = $mw_bs_vo['datei'];
-$mw_bs_mono = function ($s) { return '<span class="sm-mono">' . mw_e($s) . '</span>'; };
-$mw_bs_f = function ($feld) use ($mw_bs_titel) {
-    return isset($mw_bs_titel['F:' . $feld]) ? $mw_bs_titel['F:' . $feld] : '{F:' . $feld . '}';
-};
-$mw_bs_a = function ($cmd) use ($mw_bs_titel) {
-    return isset($mw_bs_titel['A:' . $cmd]) ? $mw_bs_titel['A:' . $cmd] : '{A:' . $cmd . '}';
-};
-$mw_bs_seiten = array(
-    array(
-        'titel'    => mo_t('BAUSTEIN.UE_WERTE'),
-        'seite'    => 'Robonect',
-        'bild'     => 'einbindung_loxone_werte.png',
-        'schritte' => array('A_S1', 'A_S2', 'A_S3', 'A_S4', 'A_S5', 'A_S6', 'A_S7', 'A_S8', 'A_S9'),
-        'hinweise' => array('H_AWV', 'H_ODER', 'H_PUSH', 'H_HEIM', 'H_MESSER', 'H_DOPPELT', 'H_ANZEIGE', 'ERLAEUTERUNG'),
-        'zeilen'   => array(
-            array('B1', 'T_VI_BEFEHL', array($mw_bs_f('CODE')), 'B1_PARAM', array(), 'V_KEINE'),
-            array('B2', 'T_VI_BEFEHL', array($mw_bs_f('BATT')), 'B2_PARAM', array(), 'V_KEINE'),
-            array('B3', 'T_VI_BEFEHL', array($mw_bs_f('FEHLER')), 'B3_PARAM', array(), 'V_KEINE'),
-            array('B4', 'T_VI_BEFEHL', array($mw_bs_f('ANN')), 'B4_PARAM', array(), 'V_KEINE'),
-            array('B5', 'T_VI_BEFEHL', array($mw_bs_f('PUSH')), 'B5_PARAM', array(), 'V_KEINE'),
-            array('B6', 'T_VI_BEFEHL', array($mw_bs_f('OK')), 'B6_PARAM', array(), 'V_KEINE'),
-            array('B7', 'T_VI_BEFEHL', array($mw_bs_f('ZAEHLER')), 'B7_PARAM', array(), 'V_KEINE'),
-            array('B8', 'T_KONST', 'B8_NAME', 'B8_PARAM', array(), 'V_KEINE'),
-            array('B9', 'T_STATUS', 'B9_NAME', 'B9_PARAM', array(), 'B9_VERB'),
-            array('B10', 'T_UND', 'B10_NAME', 'P_KEINE', array(), 'B10_VERB'),
-            array('B11', 'T_BENACH', 'B11_NAME', 'P_FREI', array(), 'B11_VERB'),
-            array('B12', 'T_NICHT', 'B12_NAME', 'P_KEINE', array(), 'B12_VERB'),
-            array('B13', 'T_AWV', 'B13_NAME', 'B13_PARAM', array(), 'B13_VERB'),
-            array('B14', 'T_ODER', 'B14_NAME', 'P_KEINE', array(), 'B14_VERB'),
-            array('B15', 'T_ODER', 'B15_NAME', 'P_KEINE', array(), 'B15_VERB'),
-            array('B16', 'T_EINVERZ', 'B16_NAME', 'B16_PARAM', array(), 'B16_VERB'),
-            array('B17', 'T_BENACH', 'B17_NAME', 'P_FREI', array(), 'B17_VERB'),
-            array('B18', 'T_TASTER', 'B18_NAME', 'P_APP', array(), 'V_KEINE'),
-            array('B19', 'T_VO_EIN', array($mw_bs_a('home')), 'P_KEINE', array(), 'B19_VERB'),
-            array('B20', 'T_VI_BEFEHL', array($mw_bs_f('MAEHT')), 'B20_PARAM', array(), 'V_KEINE'),
-            array('B21', 'T_VI_BEFEHL', array($mw_bs_f('STUNDEN')), 'B21_PARAM', array(), 'V_KEINE'),
-            array('B22', 'T_VI_BEFEHL', array($mw_bs_f('MESSER')), 'B22_PARAM', array(), 'V_KEINE'),
-            array('B23', 'T_VI_BEFEHL', array($mw_bs_f('MESSERWARN')), 'B23_PARAM', array(), 'V_KEINE'),
-            array('B24', 'T_STATUS', 'B24_NAME', 'B24_PARAM', array(), 'B24_VERB'),
-            array('B25', 'T_BENACH', 'B25_NAME', 'B25_PARAM', array(), 'B25_VERB'),
-            array('B26', 'T_TASTER', 'B26_NAME', 'B26_PARAM', array(), 'V_KEINE'),
-            array('B27', 'T_VO_EIN', array($mw_bs_a('blade_reset')), 'B27_PARAM', array(), 'B27_VERB'),
-            array('B28', 'T_VI_BEFEHL', array($mw_bs_f('TEMP')), 'B28_PARAM', array(), 'V_KEINE'),
-            array('B29', 'T_VI_BEFEHL', array($mw_bs_f('FEUCHTE')), 'B29_PARAM', array(), 'V_KEINE'),
-            array('B30', 'T_VI_BEFEHL', array($mw_bs_f('WLAN')), 'B30_PARAM', array(), 'V_KEINE'),
-            array('B31', 'T_STATUS', 'B31_NAME', 'B31_PARAM', array(), 'B31_VERB'),
-            array('B32', 'T_VI_BEFEHL', array($mw_bs_f('FEHLERALTER')), 'B32_PARAM', array(), 'V_KEINE'),
-            array('B33', 'T_STATUS', 'B33_NAME', 'B33_PARAM', array(), 'B33_VERB'),
-            array('B34', 'T_GLEICH', 'B34_NAME', 'B34_PARAM', array(), 'B34_VERB'),
-            array('B35', 'T_BENACH', 'B35_NAME', 'B35_PARAM', array(), 'B35_VERB'),
-            array('B36', 'T_SCHWELL', 'B36_NAME', 'B36_PARAM', array(), 'B36_VERB'),
-            array('B37', 'T_UND', 'B37_NAME', 'B37_PARAM', array(), 'B37_VERB'),
-            array('B38', 'T_BENACH', 'B38_NAME', 'B38_PARAM', array(), 'B38_VERB'),
-            array('B39', 'T_VI_BEFEHL', array($mw_bs_f('PTEST')), 'B39_PARAM', array(), 'V_KEINE'),
-            array('B40', 'T_BENACH', 'B40_NAME', 'B40_PARAM', array(), 'B40_VERB'),
-            array('B41', 'T_VI_BEFEHL', array($mw_bs_f('AUDIO')), 'B41_PARAM', array(), 'V_KEINE'),
-            array('B42', 'T_STATUS', 'B42_NAME', 'B42_PARAM', array(), 'B42_VERB'),
-        ),
-    ),
-    array(
-        'titel'    => mo_t('BAUSTEIN.UE_STEUERUNG'),
-        'seite'    => 'Robonect Steuerung',
-        'bild'     => 'einbindung_loxone_steuerung.png',
-        'schritte' => array('B_S1', 'B_S2', 'B_S3', 'B_S4', 'B_S5', 'B_S6', 'B_S7'),
-        'hinweise' => array('H_SPERREN', 'H_WINTER', 'H_ZEITEN', 'H_ANHALTEN', 'H_STATISTIK', 'H_TOKEN'),
-        'zeilen'   => array(
-            array('S1', 'T_VI_BEFEHL', array($mw_bs_f('MODUS')), 'S1_PARAM', array(), 'V_KEINE'),
-            array('S2', 'T_VI_BEFEHL', array($mw_bs_f('TIMER')), 'S2_PARAM', array(), 'V_KEINE'),
-            array('S3', 'T_STATUS', 'S3_NAME', 'S3_PARAM', array(), 'S3_VERB'),
-            array('S4', 'T_VI_BEFEHL', array($mw_bs_f('MAEHT')), 'S4_PARAM', array(), 'V_KEINE'),
-            array('S5', 'T_VI_BEFEHL', array($mw_bs_f('LAEDT')), 'S5_PARAM', array(), 'V_KEINE'),
-            array('S6', 'T_VI_BEFEHL', array($mw_bs_f('DAUER')), 'S6_PARAM', array(), 'V_KEINE'),
-            array('S7', 'T_STATUS', 'S7_NAME', 'S7_PARAM', array(), 'S7_VERB'),
-            array('S8', 'T_VI_BEFEHL', array($mw_bs_f('EINSHEUTE')), 'S8_PARAM', array(), 'V_KEINE'),
-            array('S9', 'T_VI_BEFEHL', array($mw_bs_f('MINHEUTE')), 'S9_PARAM', array(), 'V_KEINE'),
-            array('S10', 'T_VI_BEFEHL', array($mw_bs_f('EINSWOCHE')), 'S10_PARAM', array(), 'V_KEINE'),
-            array('S11', 'T_VI_BEFEHL', array($mw_bs_f('MINWOCHE')), 'S11_PARAM', array(), 'V_KEINE'),
-            array('S12', 'T_STATUS', 'S12_NAME', 'S12_PARAM', array(), 'S12_VERB'),
-            array('S13', 'T_TASTER', 'S13_NAME', 'P_APP', array(), 'V_KEINE'),
-            array('S14', 'T_VO_EIN', array($mw_bs_a('start')), 'P_KEINE', array(), 'S14_VERB'),
-            array('S15', 'T_TASTER', 'S15_NAME', 'S15_PARAM', array(), 'V_KEINE'),
-            array('S16', 'T_VO_EIN', array($mw_bs_a('stop')), 'P_KEINE', array(), 'S16_VERB'),
-            array('S17', 'T_TASTER', 'S17_NAME', 'P_APP', array(), 'V_KEINE'),
-            array('S18', 'T_VO_EIN', array($mw_bs_a('man')), 'P_KEINE', array(), 'S18_VERB'),
-            array('S19', 'T_SCHALTER', 'S19_NAME', 'S19_PARAM', array(), 'V_KEINE'),
-            array('S20', 'T_AUSVERZ', 'S20_NAME', 'S20_PARAM', array(), 'S20_VERB'),
-            array('S21', 'T_SCHALTUHR', 'S21_NAME', 'S21_PARAM', array(), 'V_KEINE'),
-            array('S22', 'T_SCHALTER', 'S22_NAME', 'S22_PARAM', array(), 'V_KEINE'),
-            array('S23', 'T_ODER', 'S23_NAME', 'P_KEINE', array(), 'S23_VERB'),
-            array('S24', 'T_SCHALTER', 'S24_NAME', 'S24_PARAM', array(), 'V_KEINE'),
-            array('S25', 'T_UND', 'S25_NAME', 'P_KEINE', array(), 'S25_VERB'),
-            array('S26', 'T_FLANKE', 'S26_NAME', 'S26_PARAM', array(), 'S26_VERB'),
-            array('S27', 'T_TASTER', 'S27_NAME', 'S27_PARAM', array(), 'V_KEINE'),
-            array('S28', 'T_ODER', 'S28_NAME', 'S28_PARAM', array(), 'S28_VERB'),
-            array('S29', 'T_VO_EIN', array($mw_bs_a('eod')), 'P_KEINE', array(), 'S29_VERB'),
-            array('S30', 'T_TASTER', 'S30_NAME', 'S30_PARAM', array(), 'V_KEINE'),
-            array('S31', 'T_ODER', 'S31_NAME', 'S31_PARAM', array(), 'S31_VERB'),
-            array('S32', 'T_VO_EIN', array($mw_bs_a('auto')), 'P_KEINE', array(), 'S32_VERB'),
-            array('S33', 'T_STATUS', 'S33_NAME', 'S33_PARAM', array(), 'S33_VERB'),
-            array('S34', 'T_ODER', 'S34_NAME', 'S34_PARAM', array(), 'S34_VERB'),
-        ),
-    ),
-);
-$mw_bs_nr = array();
-foreach ($mw_bs_seiten as $mw_bs_s) {
-    foreach ($mw_bs_s['zeilen'] as $mw_bs_i => $mw_bs_z) { $mw_bs_nr[$mw_bs_z[0]] = $mw_bs_i + 1; }
-}
-/* Erst vsprintf auf den Sprachtext, dann die Platzhalter: die eingesetzten
- * Titel und Adressen kommen so nie durch vsprintf. */
-$mw_bs_t = function ($schluessel, $argumente = array()) use ($mw_bs_nr, $mw_bs_titel, $mw_bs_mono) {
-    $s = (string) mo_t('BAUSTEIN.' . $schluessel);
-    if ($argumente) { $s = vsprintf($s, $argumente); }
-    return preg_replace_callback('/\{([BS]\d+|[FATC]:[A-Za-z0-9_]+|L:[A-Z]+\.[A-Z0-9_]+)\}/', function ($m) use ($mw_bs_nr, $mw_bs_titel, $mw_bs_mono) {
-        if (isset($mw_bs_nr[$m[1]])) { return '#' . $mw_bs_nr[$m[1]]; }
-        if (strncmp($m[1], 'T:', 2) === 0 && isset($mw_bs_titel[$m[1]])) { return mw_e($mw_bs_titel[$m[1]]); }
-        if (strncmp($m[1], 'C:', 2) === 0) { return $mw_bs_mono(mo_check(substr($m[1], 2))); }
-        if (strncmp($m[1], 'L:', 2) === 0) { return mw_e(mo_t(substr($m[1], 2))); }
-        return isset($mw_bs_titel[$m[1]]) ? $mw_bs_mono($mw_bs_titel[$m[1]]) : $m[0];
-    }, $s);
-}; ?>
-<?php echo $mw_bs_t('TEXT'); ?>
-<?php foreach ($mw_bs_seiten as $mw_bs_s) { ?>
-<h3><?php echo mw_e($mw_bs_s['titel']); ?></h3>
-<div class="sm-hinweis"><b><?php echo mw_e(mo_t('BAUSTEIN.SO_TITEL')); ?></b>
-<ol>
-<?php foreach ($mw_bs_s['schritte'] as $mw_bs_k) { ?>
-<li><?php echo $mw_bs_t($mw_bs_k); ?></li>
-<?php } ?>
-</ol>
-</div>
-<div class="sm-breit">
-<table class="sm-tbl">
-<tr><th>#</th><th><?php echo mw_e(mo_t('BAUSTEIN.T_TYP')); ?></th><th><?php echo mw_e(mo_t('BAUSTEIN.T_NAME')); ?></th><th><?php echo mw_e(mo_t('BAUSTEIN.T_PARAM')); ?></th><th><?php echo mw_e(mo_t('BAUSTEIN.T_VERB')); ?></th></tr>
-<?php foreach ($mw_bs_s['zeilen'] as $mw_bs_i => $mw_bs_z) { ?>
-<tr><td><?php echo $mw_bs_i + 1; ?></td><td><?php echo $mw_bs_t($mw_bs_z[1]); ?></td><td><span class="sm-mono"><?php echo is_array($mw_bs_z[2]) ? mw_e($mw_bs_z[2][0]) : $mw_bs_t($mw_bs_z[2]); ?></span></td><td><?php echo $mw_bs_t($mw_bs_z[3], $mw_bs_z[4]); ?></td><td><?php echo $mw_bs_t($mw_bs_z[5]); ?></td></tr>
-<?php } ?>
-</table>
-</div>
-<p class="sm-hilfe"><b><?php echo mw_e(mo_t('BAUSTEIN.H_TITEL')); ?></b></p>
-<ul class="sm-hilfe">
-<?php foreach ($mw_bs_s['hinweise'] as $mw_bs_k) { ?>
-<li><?php echo $mw_bs_t($mw_bs_k); ?></li>
-<?php } ?>
-</ul>
-<figure class="sm-bild">
-<img src="<?php echo mw_e($mw_bs_s['bild']); ?>" alt="<?php echo mw_e(sprintf(mo_t('TEXT.BILD_ALT'), $mw_bs_s['titel'])); ?>" loading="lazy">
-<figcaption><?php echo mw_e(sprintf(mo_t('TEXT.BILD_UNTERSCHRIFT'), $mw_bs_s['seite'])); ?></figcaption>
-</figure>
-<div class="sm-small"><?php echo mo_t('TEXT.MUSTERPROJEKT'); ?></div>
-<?php } ?>
-</div>
-
 <div class="sm-step"><b><?php echo mw_e(mo_t('TEXT.SCHRITT_7_GEGENPROBE')); ?></b><br>
 <?php echo mo_t('TEXT.GEGENPROBE_TEXT'); ?><br>
 <span class="sm-mono">http://<?php echo $mw_host; ?>/plugins/<?php echo mw_e($mw_plugin); ?>/mower.php?json=1</span>
 </div>
+</details>
 </div>
 
 <!-- ================= Test ================= -->
@@ -1469,6 +1566,14 @@ foreach (mo_selbsttest(__FILE__, $mw_reiter, $mw_tab === 'tab-test') as $mw_z) {
 <?php } ?>
 </table>
 <div class="sm-hilfe"><?php echo mo_t('TEXT.SELBST_STRICH'); ?></div>
+
+<?php /* Gruppe 2 / MQTT (1.1.24, Entwurf gemeinsam 2.11): die Einrichtungspruefung der Befehlsbruecke
+       * (befehlsbruecke.php --pruefen); der Zustand steht oben in der Zeile "Laeuft die Befehlsbruecke?". */
+$mw_bbz = mo_bruecke_pruefzeilen(); ?>
+<h3 class="sm-h3"><?php echo mw_e(mo_t('BEFEHL.H_TEST')); ?></h3>
+<details><summary><?php echo mw_e(mo_t('BEFEHL.H_PRUEFEN')); ?></summary>
+<div class="sm-log"><?php echo mw_e($mw_bbz ? implode("\n", $mw_bbz) : mo_t('BEFEHL.P_FEHLT')); ?></div>
+</details>
 
 <div class="sm-legende">
 <span><i class="sm-punkt sm-b-lesen"></i> <?php echo mw_e(mo_t('LEGENDE.LESEN')); ?></span>

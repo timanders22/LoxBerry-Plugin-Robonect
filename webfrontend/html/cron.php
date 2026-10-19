@@ -10,6 +10,8 @@
  * 4. Das Lebenszeichen fortschreiben.
  * 5. MQTT bei Aenderung (nur die geaenderten Themen), halbstuendlich der volle
  *    Satz, danach das Lebenszeichen; ausgetragene Maeher bekommen einmal '-'.
+ *    Ohne eingerichteten Maeher geht fuer Maeher 1 "nicht eingerichtet" hinaus (1.1.24, E5).
+ * 6. Der Waechter der Befehlsbruecke (1.1.24, bin/befehlsbruecke.php).
  *
  * Die Reihenfolge 4 vor 5 ist seit 1.1.6 wichtig (A6): mo_mqtt_publish()
  * las lauf.json, bevor mo_lauf_vermerken() es geschrieben hatte.
@@ -186,8 +188,14 @@ foreach (mo_mowers() as $n => $m) {
  * Maeher schweigt" von "der Cron laeuft gar nicht mehr". */
 $mo_lauf = mo_lauf_vermerken($mo_gemessen);
 
-/* DANN senden. */
-foreach ($mo_stand as $n => $st) {
+/* DANN senden.
+ *
+ * Gruppe 2 / MQTT (1.1.24, Entwurf rb E5): ohne eingerichteten Maeher ging ueber MQTT ausser dem
+ * Lebenszeichen nichts hinaus - in Loxone blieb maeher_ok auf 1 stehen, wenn jemand den Maeher austrug. Jetzt
+ * geht fuer Maeher 1 derselbe Satz wie ueber HTTP hinaus: ok 0, code -1 (mo_state() ohne Maeher). Gezaehlt
+ * und gemessen wird dabei nichts. */
+$mo_senden = $mo_stand ? $mo_stand : array(1 => mo_state(1));
+foreach ($mo_senden as $n => $st) {
     /* A5 (06.09.2026, gemessen): bis 1.1.5 stand hier eine von Hand
      * geschriebene Liste aus sieben Angaben. temperatur, feuchte, wlan,
      * dauer, timer und messer_rest fehlten darin. Gemessen: Temperatur von
@@ -243,6 +251,12 @@ mo_mqtt_lebenszeichen($mo_stand);
 /* M4 (Durchgang 01.10.2026): ist die Zahl der Maeher gesunken, bekommen die
  * weggefallenen einmal '-' auf ihre Zustandsthemen (mo_mqtt_ausgetragen()). */
 mo_mqtt_ausgetragen();
+
+/* Gruppe 2 / MQTT (1.1.24): der Waechter der Befehlsbruecke (Bauvorschrift Gruppe 1, Nachtrag: "Linien mit
+ * PHP-Minutentakt rufen bb_waechter()"). Er startet und haelt an, misst zustand.json und sendet
+ * <praefix>/status/befehle (1 laeuft, 0 aus, -1 gestoert; nie retained). Dieser Lauf haelt cron.lock -
+ * befehlsbruecke.sh schliesst geerbte Deskriptoren, der Dienst erbt die Sperre nicht (Brueckenbericht 4 Nr. 3). */
+mo_bruecke_waechter();
 
 echo 'OK;GEMESSEN=' . $mo_gemessen . ';MAEHER=' . $mo_anzahl
    . ';ZAEHLER=' . (int) $mo_lauf['zaehler'] . "\n";

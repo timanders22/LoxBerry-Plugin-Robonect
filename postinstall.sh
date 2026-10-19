@@ -180,6 +180,14 @@ if [ "$MO_GEHOLT" = "1" ] && [ "$AKT" = "0" ]; then
     echo "<OK> Konfiguration aus Sicherung wiederhergestellt."
 fi
 
+# ---------- Gruppe 2 / MQTT (1.1.24): Befehlsbruecke bei einer Neuinstallation ----------
+# Bei einer Aktualisierung startet postupgrade.sh sie (erst dort ist die Konfiguration zurueck). Bei einer
+# Neuinstallation sind die Haken ab Werk aus - befehlsbruecke.sh start sagt dann nur "Haken aus". Nie als root.
+BBSH="$BASE/bin/plugins/$PFOLDER/befehlsbruecke.sh"
+if [ "$AKT" = "0" ] && [ -f "$BBSH" ] && [ "$(id -u)" != "0" ]; then
+    timeout 40 bash "$BBSH" start 2>&1 | head -n 1 | sed 's/^/<INFO> Befehlsbruecke: /'
+fi
+
 # Die Schlusszeile des Aktualisierungsfalls gibt postupgrade.sh aus - erst
 # dort ist die gerettete Konfiguration an ihrem Platz.
 if [ "$AKT" = "0" ]; then

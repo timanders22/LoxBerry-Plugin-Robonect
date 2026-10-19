@@ -7,14 +7,43 @@ Bisher übliche Praxis ist eine URL wie
 `http://mäher/xml?user=admin&pass=geheim&cmd=status` direkt im virtuellen Eingang.
 Damit steht das Klartext-Passwort in der Projektdatei, in jedem Backup und in
 jeder Datei, die man zur Fehlersuche weitergibt. Dieses Plugin hält die
-Zugangsdaten lokal (Dateirechte 0600, HTTP-Basic-Auth) — Loxone ruft nur noch
-`http://loxberry/plugins/robonect/mower.php` auf.
+Zugangsdaten lokal (Dateirechte 0600, HTTP-Basic-Auth) — die Werte gehen über MQTT
+an das MQTT-Gateway (Virtuelle Eingänge im Miniserver), Befehle über die Befehlsbrücke
+(zwei Haken im Reiter MQTT, ab Werk aus). Für bestehende Anlagen bleibt der Weg über
+`http://loxberry/plugins/robonect/mower.php` mit Aktionstoken.
 
 Kompatibel mit LoxBerry 3.x und **LoxBerry 4** (reines PHP, PHP 7.4 und 8.x).
 
 Die Bausteine der beiden Baustein-Listen aus dem Reiter *Einbindung in Loxone* stehen fertig verbunden
 auf den Seiten „Robonect“ und „Robonect Steuerung“ im [LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt),
 einer gemeinsamen Projektdatei mit allen Plugin-Seiten und Vorlagen.
+
+## Neu in 1.1.24
+
+Werte und Befehle laufen über MQTT – so wie im LoxBerry-Plugins Musterprojekt.
+
+- **MQTT ab Werk an** – nur bei neuen Installationen; bestehende behalten ihren Schalter.
+- **Befehle über MQTT** (Befehlsbrücke, gemeinsames Modul `bin/befehlsbruecke.php`): `maeher/befehl/starten`,
+  `anhalten`, `automatik`, `heim`, `feierabend`, `handbetrieb`, `messer_gewechselt` mit dem Wert 1
+  (Mäher 2 bis 9: `maeher/befehl/<n>/…`), Quittung auf `…/quittung`, Lebenszeichen `maeher/status/befehle`.
+  Zwei Haken im Reiter MQTT, beide ab Werk aus: „Befehle über MQTT annehmen“ und für die sechs Fahrbefehle
+  zusätzlich „Mäher über MQTT steuern“. Derselbe Fahrbefehl wird erst nach 10 s (Starten, Anhalten) bzw. 60 s
+  (Betriebsarten) wieder angenommen. Vorlage „Rasenmäher MQTT-Befehle“ im Reiter *Einbindung in Loxone*.
+- **-1 heißt „nicht bekannt“**, über HTTP und MQTT: Betriebsstunden, Einsatzdauer, Timer, mäht/lädt (ohne
+  Statuscode), Messerwarnung (ohne Betriebsstunden) und – ohne den Haken „Einsätze und Mähdauer mitzählen“ – die
+  vier Statistikwerte. Über MQTT steht in Zahlenthemen kein „-“ mehr. Temperatur und WLAN bleiben bei -999 (dort
+  wäre -1 ein Messwert). Ohne eingerichteten Mäher geht über MQTT „nicht eingerichtet“ hinaus (ok 0, code -1).
+  Ein Messerwechsel wird ohne gemeldete Betriebsstunden nicht quittiert (`GRUND=stunden_fehlt`).
+- **Reiter „Einbindung in Loxone“ neu**, Schritt für Schritt über MQTT: Namenstabelle mit Kopierknopf (je Wert
+  ein Virtueller Eingang; für Werte gibt es keine Importvorlage), Hakenliste für Gateway V2, Ausfallerkennung am
+  Lebenszeichen `maeher_status_zaehler` (ohne Alter aus einem Zeitstempel), Befehle. Dazu die Baustein-Listen der
+  beiden Musterseiten (44 und 52 Zeilen, zwei neue Bilder): Frostsperre mit eigenem Schalter „Frostsperre an“ (ab
+  Werk aus), Sperre bei und nach der Bewässerung, Trocknungszeit in der App, „Automatik“ nur nach einer Sperre,
+  die heimgeschickt hat, und „Ende des Tages“ auch über Mitternacht. Der Weg über HTTP bleibt für bestehende
+  Anlagen, zugeklappt.
+- **Bestehende HTTP-Anlagen:** In der HTTP-Vorlage tragen sechs Felder MinVal -1, und die vier Statistikfelder
+  stehen immer darin. Bereits importierte Eingänge behalten MinVal 0 – wer -1 sehen will, stellt MinVal am
+  Eingang auf -1.
 
 ## Neu in 1.1.23
 
@@ -834,7 +863,9 @@ liefern in beiden Sprachen zeichengleiche Ausgabe ohne eine Meldung.
   aktuellen Einsatzes, Temperatur und Feuchte im Modul, WLAN-Signal
 - **Messerwechsel-Überwachung**: Intervall in Betriebsstunden, Restlaufzeit,
   Warnung — Quittieren per Knopf oder `?cmd=blade_reset`
-- **Steuerung** per einfachem GET: `auto`, `man`, `home`, `eod`, `start`, `stop`
+- **Steuerung** über MQTT (Befehlsbrücke: `maeher/befehl/starten`, `anhalten`, `automatik`, `heim`,
+  `feierabend`, `handbetrieb`, `messer_gewechselt`) oder für bestehende Anlagen per einfachem GET:
+  `auto`, `man`, `home`, `eod`, `start`, `stop`
 - **Meldungen** als Ansage (TTS) und/oder Push: Störung, Schleifensignal
   verloren, Mähen beendet, Messerwechsel fällig, Akku unter 20 %. Die Ansage
   geht an den Loxone Music Server, Audioserver4Home/MS4H, eine eigene

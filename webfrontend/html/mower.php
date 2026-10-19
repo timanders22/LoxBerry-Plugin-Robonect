@@ -29,7 +29,8 @@
  * OK hilft dagegen nicht: es sagt, ob der Maeher beim letzten Messen
  * erreichbar war, nicht ob ueberhaupt gemessen wurde.
  *
- *   Alter in Sekunden = (Loxone-Zeit + 1230768000) - TS
+ *   Gruppe 2 / MQTT (1.1.24): die Ausfallerkennung haengt am ZAEHLER (Analogwertvalidierung in Loxone),
+ *   nicht an einem Alter aus TS - TS ist nur zur Anzeige.
  *
  * ZAEHLER laeuft 0...999 um und beantwortet, was der Zeitstempel nicht kann:
  * ein Raspberry ohne Echtzeituhr springt beim ersten Zeitabgleich. Steht der
@@ -319,6 +320,10 @@ if (isset($_GET['cmd'])) {
             if ($mo_bgrund === 'nicht_eingerichtet') {
                 http_response_code(409);
                 echo "CMD;OK=0;BEFEHL=blade_reset;GRUND=nicht_konfiguriert;INFO=Maeher nicht eingerichtet - Nullpunkt unveraendert\n";
+            } elseif ($mo_bgrund === 'stunden_fehlt') {
+                /* Gruppe 2 / MQTT (1.1.24, Entwurf rb E2): ohne gemeldete Betriebsstunden (-1) kein Nullpunkt. */
+                http_response_code(502);
+                echo "CMD;OK=0;BEFEHL=blade_reset;GRUND=stunden_fehlt;INFO=Das Modul liefert keine Betriebsstunden - Nullpunkt unveraendert\n";
             } elseif ($mo_bgrund === 'schreibfehler') {
                 http_response_code(500);
                 echo "CMD;OK=0;BEFEHL=blade_reset;GRUND=schreibfehler;INFO=Die Konfiguration liess sich nicht schreiben - Nullpunkt unveraendert\n";
