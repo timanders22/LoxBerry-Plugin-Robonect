@@ -18,6 +18,32 @@ Die Bausteine der beiden Baustein-Listen aus dem Reiter *Einbindung in Loxone* s
 auf den Seiten „Robonect“ und „Robonect Steuerung“ im [LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt),
 einer gemeinsamen Projektdatei mit allen Plugin-Seiten und Vorlagen.
 
+## Neu in 1.1.25
+
+Pflegefassung: die gemeinsamen Module auf dem Hausstand, dazu mehrere Lautsprecher gleichzeitig für die Ansagen. Werte,
+Themen und Befehle bleiben, wie sie sind.
+
+- **Sonos4Lox und SonoX** als Ausgabeart der Sprachausgabe (ab Werk nicht gewählt, ungemessen – kein Sonos im
+  Haus). Das Formular zeigt Zone bzw. Raum, Lautstärke und (SonoX) Sprache; der Reiter Test prüft, ob das Plugin
+  installiert ist und die Zone bzw. den Raum kennt. **SonoX schickt den Ansagetext an Google** (Sprachausgabe dort)
+  und antwortet erst nach der Wiedergabe (bis 30 s).
+- **Gemeinsame Sprachausgabe 1.2.1** (bisher 1.1.2).
+* **Mehrere Lautsprecher gleichzeitig (Sprachmodul 1.2.1):** Unter der Ausgabeart (jetzt „Ziel 1“) nimmt die Tabelle
+  *Weitere Ausgabeziele (gleichzeitig)* bis zu fünf weitere Ziele auf – etwa Google-Lautsprecher (Chromecast 4 Lox NG)
+  in einem Raum und Amazon Echo (Alexa-NG) in einem anderen neben dem Loxone Music Server. Die Ansage geht an alle
+  eingeschalteten Ziele zugleich (eine Ansage dauert so lange wie das langsamste Ziel, höchstens 10 s, mit Sonos 30 s);
+  scheitert eines, sprechen die anderen. Protokoll und Reiter Test nennen jedes Ziel, im Reiter Test gibt es je Ziel
+  eine Testansage. Die bestehende Einstellung ist unverändert Ziel 1; ohne weitere Ziele verhält sich alles wie in
+  1.1.24. Antwort an Loxone, MQTT-Themen und Brückenbefehl `ansage` bleiben, wie sie sind.
+* **Vor einem Zurückgehen** auf 1.1.24 oder älter die weiteren Ziele entfernen: ältere Fassungen kennen die Liste nicht
+  und fielen beim Laden auf die Werkseinstellung der Sprachausgabe zurück.
+- **Reiter Test:** *Testansage* spricht wie bisher an alle Ziele; die Knöpfe *Testansage an Ziel n* daneben sprechen
+  den Testsatz nur an diesem Ziel.
+- **Befehlsbrücke 1.0.2** (bisher 1.0.0): die Vorlage „Rasenmäher MQTT-Befehle“ hat Windows-Zeilenenden wie die
+  Ausfuhren der Loxone Config; `stop` legt als root nichts mehr an, `befehle_start.log` wird gekappt, eine leere
+  Uhr startet den Dienst nicht, der Befehlsordner ist nur für das Plugin lesbar (0700).
+- Der Selbsttest der Haken für Gateway V2 im Reiter Test ist unverändert.
+
 ## Neu in 1.1.24
 
 Werte und Befehle laufen über MQTT – so wie im LoxBerry-Plugins Musterprojekt.
@@ -680,7 +706,7 @@ nicht an einem echten Lautsprecher.
   Messer) und die Länge; der Satz selbst ist zugleich der Ansagetext.
 * Wartezeit beim Music Server 10 s wie in allen Plugins (bisher 5 s); ein Netzfehler nennt seinen Text.
 * Die Einstellungen bekommen zwei Felder `tts.sonos_zone` und `tts.sonos_laut` mit Vorgabewerten (Sonos4Lox
-  bietet dieses Plugin nicht an). Eine Sicherung aus 1.1.17 und älter wird angenommen.
+  bot dieses Plugin damals noch nicht an). Eine Sicherung aus 1.1.17 und älter wird angenommen.
 
 **In Loxone:** nichts zu tun.
 

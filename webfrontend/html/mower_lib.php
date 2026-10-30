@@ -20,7 +20,8 @@ date_default_timezone_set('Europe/Berlin');
 
 
 /* Gemeinsame Sprachausgabe (Abschrift von Werkzeuge/gemeinsam/sprachausgabe.php,
- * Nr. 36 b; seit 1.1.18 Stufe 2 mit Modul 1.1.1). Liegt neben dieser Datei; sie legt
+ * Nr. 36 b; seit 1.1.18 Stufe 2 mit Modul 1.1.1, seit 1.1.25 Stamm 1.2.1 mit weiteren Ausgabezielen, mo_mit_zielen(),
+ * Welle Mehrfach-Ziele). Liegt neben dieser Datei; sie legt
  * beim Einbinden nur Funktionen an und schuetzt sich selbst gegen doppeltes Laden. */
 require_once __DIR__ . '/sprachausgabe.php';
 
@@ -2956,8 +2957,8 @@ function mo_zusatzwerte($dev = 1)
  * mo_tts_url, eigener Ruf an den Music Server, eigene Wertpruefung); sie sind entfallen.
  *
  * Ab Werk unveraendert: Ausgabeart Music Server ohne IP; gesprochen wird nur mit dem Haken
- * "Audioausgabe aktiv" (notify.audio, ab Werk aus); dieselben sechs Ausgabearten wie bisher
- * (ohne 'aus' - der Haken ist der Schalter - und ohne Sonos4Lox). Neu und gewollt: Adresse und
+ * "Audioausgabe aktiv" (notify.audio, ab Werk aus); ohne 'aus' - der Haken ist der Schalter.
+ * Seit 1.1.25 (Nachtwelle N2, Modul 1.2.0) dazu Sonos4Lox und SonoX. Neu und gewollt: Adresse und
  * Vorlage muessen im Heimnetz liegen (Speichern, Zurueckspielen und vor jedem Senden); 10 s
  * Zeitgrenze wie in allen Linien (bis 1.1.17 beim Music Server 5 s); ins Protokoll nur die
  * Kurzform ansage_kurz() - nie Text, Token oder die Adresse des Music Servers.
@@ -2970,10 +2971,66 @@ function mo_webport()
     return ansage_webport($p['lbhome'] !== '' ? $p['lbhome'] . '/config/system/general.json' : '');
 }
 
-/** Die Ausgabearten dieser Linie - dieselben sechs wie bis 1.1.17. */
+/** Die Ausgabearten dieser Linie - die sechs von 1.1.17 und seit 1.1.25 (Nachtwelle N2, Pflegewelle 22) Sonos4Lox
+ *  und, ab Modul 1.1.4, SonoX (ungemessen, kein Sonos im Haus; das Modul prueft Installation und Zone bzw. Raum).
+ *  Weitere Ausgabeziele (Tabelle, 'ziele') seit 1.1.25 mit Stamm 1.2.1 - mo_mit_zielen() unten; ohne Tabelle wie 1.1.4.
+ *  Die Fassungspruefung schuetzt vor einer zuerst geladenen aelteren Abschrift (Modul 1.1.4, Kopf "Wer 'sonox'
+ *  anbietet"); in dieser Linie laedt nur mower_lib.php das Modul. */
 function mo_ansage_modi()
 {
-    return array('musicserver', 'ms4h', 'audioserver', 'custom', 'alexang', 'cc4lox');
+    $m = array('musicserver', 'ms4h', 'audioserver', 'custom', 'alexang', 'cc4lox', 'sonos4lox');
+    if (version_compare(ANSAGE_FASSUNG, '1.1.4', '>=')) { $m[] = 'sonox'; }
+    return $m;
+}
+
+/** Welle Mehrfach-Ziele (Sprachmodul 1.2.1): bietet diese Linie die Tabelle der weiteren Ausgabeziele an? Nur, wenn die
+ *  geladene Abschrift sie kann - laden zwei Abschriften im selben Prozess, gilt die zuerst geladene. */
+function mo_mit_zielen() {
+    return version_compare(ANSAGE_FASSUNG, '1.2.0', '>=') && function_exists('ansage_ziele_html')
+        && function_exists('ansage_ziele_pruefen') && function_exists('ansage_testknoepfe_html');
+}
+
+/** Welle Mehrfach-Ziele (1.1.25), X-2: die Felder der Tabelle aus dem POST (name[N], N = 2..9) fuer die Einmalmeldung -
+ *  mw_eingaben_sammeln() liest nur flache Felder und die Maeherzeilen. Nur, wenn die geladene Abschrift die Tabelle kann. */
+function mo_ziele_x2_werte(array $post)
+{
+    $w = array();
+    if (!mo_mit_zielen()) { return $w; }
+    foreach (array('tts_ziel_art', 'tts_ziel_wo', 'tts_ziel_laut', 'tts_ziel_sprache', 'tts_ziel_ein', 'tts_ziel_loeschen') as $n) {
+        if (!isset($post[$n]) || !is_array($post[$n])) { continue; }
+        foreach ($post[$n] as $i => $v) {
+            if (is_string($v) && preg_match('/^[2-9]\z/', (string) $i)) { $w[$n . '[' . $i . ']'] = substr($v, 0, 600); }
+        }
+    }
+    return $w;
+}
+
+/** Welle Mehrfach-Ziele (1.1.25), X-2: aus den Eingaben der Einmalmeldung (Schluessel name[N]) wieder das POST der Tabelle
+ *  (ziele_post); null, wenn die Tabelle nicht darin steht (die gespeicherten Ziele bleiben sichtbar). */
+function mo_ziele_x2_post(array $werte)
+{
+    $p = array();
+    foreach ($werte as $k => $v) {
+        if (is_string($v) && preg_match('/^(tts_ziel_[a-z]+)\[([2-9])\]\z/', (string) $k, $m)) { $p[$m[1]][(int) $m[2]] = $v; }
+    }
+    return isset($p['tts_ziel_art']) ? $p : null;
+}
+
+/** Welle Mehrfach-Ziele (1.1.25): beim Zurueckspielen die Spaetliste (Stueck d) - $neu aus mo_sicherung_lesen() (geht von
+ *  den Vorgaben aus), $jetzt die geltende Einstellung. Rueckgabe: array(neu, Namen der behaltenen Schluessel). */
+function mo_sicherung_spaet($neu, $jetzt)
+{
+    $liste = array();
+    /* Welle Mehrfach-Ziele (Sprachmodul 1.2.1, Spaetliste): fehlt die Liste der weiteren Ziele in der Sicherung (Datei einer
+     * aelteren Fassung), gelten die jetzigen weiteren Ziele weiter - genannt im Hinweis. Eine Sicherung MIT leerer Liste
+     * heisst "keine weiteren Ziele" und wird so uebernommen. */
+    $mw_spaete = array();
+    if (isset($neu['tts']) && is_array($neu['tts']) && function_exists('ansage_sicherung_spaet')) {
+        list($neu['tts'], $mw_spaete) = ansage_sicherung_spaet($neu['tts'],
+            (isset($jetzt['tts']) && is_array($jetzt['tts'])) ? $jetzt['tts'] : null);
+    }
+    foreach ($mw_spaete as $mw_sn) { $liste[] = $mw_sn; }     // Welle Mehrfach-Ziele: tts.ziele (Spaetliste)
+    return array($neu, $liste);
 }
 
 /** Optionen fuer Formular-Baustein und Formular-Lesen: die Ausgabearten und die POST-Namen der

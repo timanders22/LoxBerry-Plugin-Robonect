@@ -230,6 +230,7 @@ function mw_eingaben_sammeln($formular, array $falsch)
         if (isset($_POST[$n]) && is_string($_POST[$n])) { $werte[$n] = substr($_POST[$n], 0, 600); }
     }
     if ($formular === 'einst') {
+        $werte += mo_ziele_x2_werte($_POST);     // Welle Mehrfach-Ziele (1.1.25): die Tabelle als name[N]
         foreach (array('m_name', 'm_ip', 'm_user', 'm_bhours', 'm_bbase', 'm_del') as $n) {
             if (!isset($_POST[$n]) || !is_array($_POST[$n])) { continue; }
             foreach ($_POST[$n] as $i => $w) {
@@ -337,11 +338,15 @@ if ($mw_ist_post && isset($_POST['mo_zurueck'])) {
             if (is_array($mw_neu['tts'])) {
                 $mw_neu['tts'] = ansage_sicherung_tokens_behalten($mw_neu['tts'], $mw_cfg['tts']);
             }
+            /* Welle Mehrfach-Ziele (1.1.25): fehlt die Liste der weiteren Ziele in der Sicherung (aeltere Fassung),
+             * gelten die jetzigen weiteren Ziele (mo_sicherung_spaet(), genannt in der Meldung). */
+            list($mw_neu, $mw_spaet) = mo_sicherung_spaet($mw_neu, $mw_cfg);
             $mw_alt_cfg = $mw_cfg;
             if (mo_config_speichern($mw_neu)) {
                 $mw_cfg = mo_config();
                 $mw_fmt = mo_formtoken();   // das Merkmal haengt am Token
                 $mw_ok[] = sprintf(mo_t('TEXT.SICH_UEBERNOMMEN'), $mw_n);
+                if ($mw_spaet) { $mw_ok[] = mw_e(sprintf(mo_t('TEXT.SICH_SPAET'), implode(', ', $mw_spaet))); }
                 if ($mw_token_blieb) { $mw_ok[] = mo_t('TEXT.SICH_TOKEN_BLIEB'); }
                 mo_log('Einstellungen aus einer Sicherung zurueckgespielt: ' . $mw_n . ' Werte'
                     . ($mw_token_blieb ? ' (die Datei trug kein Aktionstoken - das bisherige bleibt).' : '.'));
@@ -425,6 +430,31 @@ if ($mw_ist_post && isset($_POST['tts_test'])) {
         $mw_warn[] = sprintf(mo_t('TEXT.TESTANSAGE_NICHTS'), mw_e(ansage_kennung_text($mw_ar['kennung'], $mw_ak)));
     } else {
         $mw_fehler[] = sprintf(mo_t('TEXT.TESTANSAGE_FEHL'), mw_e(ansage_kennung_text($mw_ar['kennung'], $mw_ak)));
+    }
+    $mw_tab = 'tab-test';
+}
+/* Welle Mehrfach-Ziele (Sprachmodul 1.2.1): die Knoepfe "Testansage an Ziel n" schicken ansage_test_ziel=n - es spricht
+ * nur dieses Ziel; der bisherige Knopf spricht an alle Ziele gleichzeitig. Eine unbrauchbare Nummer spricht nichts. */
+if ($mw_ist_post && (isset($_POST['ansage_test']) || isset($_POST['ansage_test_ziel']))) {
+    $mw_tk = mo_ansage_k();
+    $mw_tnur = (isset($_POST['ansage_test_ziel']) && mo_mit_zielen()) ? ansage_test_ziel($_POST) : 0;
+    if (isset($_POST['ansage_test_ziel']) && $mw_tnur === 0) {
+        $mw_tr = array('stand' => 0, 'kennung' => 'ZIEL_UNBEKANNT|-', 'art' => '-', 'http' => 0, 'zeile' => '', 'zeichen' => 0);
+    } elseif ($mw_tnur >= 1) {
+        $mw_tr = ansage_testansage(mo_tts(), $mw_tk, $mw_tnur);
+    } else {
+        $mw_tr = ansage_testansage(mo_tts(), $mw_tk);
+    }
+    mo_log('Testansage' . ($mw_tnur >= 1 ? ' an Ziel ' . $mw_tnur : '') . ': ' . ansage_kurz($mw_tr));
+    if ($mw_tr['stand'] === 1) {
+        $mw_ok[] = sprintf(mo_t('TEXT.TESTANSAGE_OK'), mw_e((string) $mw_tr['art']));
+        if ($mw_tr['art'] === 'cc4lox' && $mw_tr['zeile'] !== '') {
+            $mw_ok[] = sprintf(mo_t('TEXT.TESTANSAGE_ANTWORT'), mw_e($mw_tr['zeile']));
+        }
+    } elseif ($mw_tr['stand'] === -1) {
+        $mw_warn[] = sprintf(mo_t('TEXT.TESTANSAGE_NICHTS'), mw_e(ansage_kennung_text($mw_tr['kennung'], $mw_tk)));
+    } else {
+        $mw_fehler[] = sprintf(mo_t('TEXT.TESTANSAGE_FEHL'), mw_e(ansage_kennung_text($mw_tr['kennung'], $mw_tk)));
     }
     $mw_tab = 'tab-test';
 }
@@ -551,7 +581,9 @@ if ($mw_ist_post && isset($_POST['save'])) {
      * beanstandeten Felder ($mw_tbean) werden markiert (X-2). */
     $mw_tmangel = array();
     $mw_tbean = array();
-    $mw_tts_neu = ansage_formular_lesen($_POST, mo_tts(), $mw_tmangel, $mw_tbean, mo_ansage_opt(), mo_ansage_k());
+    $mw_thinw = array();     // Welle Mehrfach-Ziele (Sprachmodul 1.2.1): Hinweise des Moduls, die das Speichern nicht verhindern
+    $mw_tts_neu = ansage_formular_lesen($_POST, mo_tts(), $mw_tmangel, $mw_tbean,
+        mo_ansage_opt() + array('ziele' => mo_mit_zielen()), mo_ansage_k(), $mw_thinw);
     /* Robonect-eigen (C6, Durchgang 01.10.2026, Nr. 19): leere Zonen werden beanstandet wie bis 1.1.17 -
      * die Sprachausgabe 1.1.1 nimmt '' als "keine Angabe" und spricht dann still in Zone 1. */
     if (!in_array('tts_zones', $mw_tbean, true) && is_string($mw_tts_neu['zones']) && trim($mw_tts_neu['zones']) === '') {
@@ -575,6 +607,7 @@ if ($mw_ist_post && isset($_POST['save'])) {
         $mw_cfg = mo_config();
         $mw_ok[] = '<b>' . mw_e(mo_t('TEXT.KONFIGURATION_GESPEICHERT')) . '</b> '
                  . mw_e(mo_t('TEXT.ZUGANGSDATEN_MIT_DATEIRECHTEN_0600'));
+        foreach ($mw_thinw as $mw_th) { $mw_warn[] = $mw_th['text']; }     // Welle Mehrfach-Ziele: erst nach dem Speichern
     } else {
         $mw_fehler[] = sprintf(mo_t('TEXT.FEHLER_SCHREIBEN'), mw_e($mw_cfgfile));
     }
@@ -968,7 +1001,10 @@ echo ansage_formular_html($mw_tts, array(
     'm' => function ($n) { return mw_falsch($n); },
     'c' => function ($n, $g) { return mw_haken('einst', $n, $g); },
     'modi' => mo_ansage_modi(),
-    'namen' => mo_ansage_opt()['namen']), mo_ansage_k()); ?>
+    'namen' => mo_ansage_opt()['namen'],
+    /* Welle Mehrfach-Ziele (Sprachmodul 1.2.1): Tabelle der weiteren Ausgabeziele; nach einer Beanstandung traegt sie das Eingetippte. */
+    'ziele' => mo_mit_zielen(),
+    'ziele_post' => (mw_x2('einst') && isset($mw_eingaben['werte']) && is_array($mw_eingaben['werte'])) ? mo_ziele_x2_post($mw_eingaben['werte']) : null), mo_ansage_k()); ?>
 
 <div class="sm-legende">
 <span><i class="sm-punkt sm-b-lesen"></i> <?php echo mw_e(mo_t('LEGENDE.LESEN')); ?></span>
@@ -1630,6 +1666,9 @@ $mw_bbz = mo_bruecke_pruefzeilen(); ?>
   <?php echo mo_fmt_feld(); ?>
   <input data-role="none" type="hidden" name="activetab" value="tab-test">
   <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="tts_test" value="1"><?php echo mw_e(mo_t('TEXT.K_TESTANSAGE')); ?></button>
+<?php /* Welle Mehrfach-Ziele (Sprachmodul 1.2.1): je weiteres Ziel ein Knopf "Testansage an Ziel n (Geraet (Plugin))";
+   ohne weitere Ziele nichts. */
+if (mo_mit_zielen()) { echo ansage_testknoepfe_html(mo_tts(), mo_ansage_k(), array('klasse' => 'sm-btn sm-b-aktion')); } ?>
 </form>
 </div>
 <div class="sm-small"><?php echo mo_t('TEXT.NACH_HAUSE_IST_DER_UNGEFHRLICHSTE_'); ?></div>
