@@ -18,6 +18,10 @@ Die Bausteine der beiden Baustein-Listen aus dem Reiter *Einbindung in Loxone* s
 auf den Seiten „Robonect“ und „Robonect Steuerung“ im [LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt),
 einer gemeinsamen Projektdatei mit allen Plugin-Seiten und Vorlagen.
 
+## Neu in 1.1.26
+
+Neues Plugin-Symbol.
+
 ## Neu in 1.1.25
 
 Pflegefassung: die gemeinsamen Module auf dem Hausstand, dazu mehrere Lautsprecher gleichzeitig für die Ansagen. Werte,
