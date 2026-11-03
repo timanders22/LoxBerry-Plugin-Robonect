@@ -217,7 +217,9 @@ header('Content-Type: text/plain; charset=utf-8');
  * dass etwas passiert. Sonst laesst sich nicht feststellen, ob die Adresse im
  * Miniserver noch stimmt, ohne wirklich zu schalten.
  */
-if (isset($_GET['selftest'])) {
+/* 1.1.27 (Nachzug 01.11.2026, wie Renault NG 2.1.23): !empty statt isset - bis 1.1.26 galt auch ?selftest=0 und ?selftest= als Selbsttest,
+ * und eine Adresse mit diesem Anhang tat nie etwas anderes. */
+if (!empty($_GET['selftest'])) {
     if (!mo_token_eingerichtet()) {
         http_response_code(403);
         echo "SELFTEST;OK=0;ERR=KEIN_TOKEN_EINGERICHTET\n";
@@ -415,7 +417,8 @@ if (isset($_GET['ptest'])) {
 }
 
 $st = mo_state($dev, mo_refresh_erlaubt());
-$cfg = mo_cfg_ro();
+/* bis 1.1.26 hiess dieses Feld $cfg: das LoxBerry-SDK ueberschreibt ein globales $cfg beim ersten Lesen von general.json (Ausfall MGiSmart 01.11.2026). */
+$mo_lauf_cfg = mo_cfg_ro();
 
 /* ?debug=1 nennt Name und ADRESSE des Maehers, WLAN-Pegel, Fehlertext und
  * den Nullpunkt des Messerwechsels. Das sind Innenwerte des Heimnetzes, und
@@ -442,8 +445,8 @@ if (isset($_GET['debug'])) {
      * dahin der globale Wert und damit fuer jeden Maeher ausser dem zuletzt
      * quittierten eine Zahl, die nicht galt. */
     echo 'Messer: noch ' . $st['messer_rest'] . ' h bis zum Wechsel (Intervall '
-       . ($m ? (int) $m['blade_hours'] : (int) $cfg['blade_hours'])
-       . ' h, Nullpunkt bei ' . ($m ? (int) $m['blade_base'] : (int) $cfg['blade_base'])
+       . ($m ? (int) $m['blade_hours'] : (int) $mo_lauf_cfg['blade_hours'])
+       . ' h, Nullpunkt bei ' . ($m ? (int) $m['blade_base'] : (int) $mo_lauf_cfg['blade_base'])
        . ' h' . ($m && empty($m['blade_eigen']) ? ', geerbt aus der Vorgabe' : '') . ")\n";
     echo 'Temperatur: ' . $st['temperatur'] . ' C  Feuchte: ' . $st['feuchte'] . ' %  WLAN: ' . $st['wlan'] . " dBm\n";
     echo 'Letzter Cron-Lauf: ' . ($lauf['ts'] > 0 ? date('d.m.Y H:i:s', (int) $lauf['ts'])

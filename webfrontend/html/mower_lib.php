@@ -615,11 +615,12 @@ function mo_config(&$zustand = null, $erzeugen = true) {
     unset($cfg['ip'], $cfg['user'], $cfg['pass']);
     if (!is_array($cfg['notify'])) { $cfg['notify'] = array(); }
     if (!is_array($cfg['tts'])) { $cfg['tts'] = array(); }
-    $cfg['notify'] += array('audio' => 0, 'push' => 0, 'fehler' => 1, 'fertig' => 1, 'messer' => 1, 'akku' => 0);
+    $cfg['notify'] += array('audio' => 1, 'push' => 0, 'fehler' => 1, 'fertig' => 1, 'messer' => 1, 'akku' => 0);
     /* Nr. 36 b, Stufe 2 (1.1.18): die Vorgaben des Blocks tts kommen aus der gemeinsamen
      * Sprachausgabe - dieselben Werte wie bis 1.1.17 (ab Werk unveraendert: Music Server ohne
      * IP; eingeschaltet wird mit dem Haken notify.audio), seit Modul 1.1.x dazu sonos_zone und
      * sonos_laut. Vorhandene Werte bleiben; die Sprechtoken sind Geheimnisse. */
+    if (!$cfg['tts']) { $cfg['tts'] = ansage_werk_block(); }     // 1.1.27: nie gesetzt = ab Werk EIN; ein gespeicherter bleibt
     list($cfg['tts']) = ansage_vervollstaendigen($cfg['tts'], 'musicserver');
     return $cfg;
 }
@@ -2475,7 +2476,10 @@ function mo_mqtt_behalten_liste(array $themen)
     /* Genau $n Bytes lesen oder null - bei Zeitablauf und Verbindungsende. */
     $lies = function ($n) use ($s) {
         $d = '';
+        /* bis 1.1.26 ohne Frist: ein Broker, der ein Paket ankuendigt und nur tropfenweise liefert, hielt den Leser fest. Schweigt er ganz, greift schon stream_set_timeout(). */
+        $lies_bis = microtime(true) + 5.0;
         while (strlen($d) < $n) {
+            if (microtime(true) >= $lies_bis) { return null; }
             $t = @fread($s, $n - strlen($d));
             if ($t === false || $t === '') {
                 $meta = stream_get_meta_data($s);
@@ -3049,6 +3053,176 @@ function mo_ansage_opt()
  * eigene Umlenkung (TEXT.SICH_TTS_EINTRAG) ist seit 1.1.20 gestrichen. 'werk': die Werksart
  * dieser Linie ist der Music Server (mo_config()) - ohne den Eintrag sagte die Seite "Ab Werk aus".
  */
+/* ---------------- Sprachansagen: Regeln aus dem Stamm (1.1.27, Welle S2, Stamm sprachausgabe.php 1.3.2) ----------------
+ *
+ * Nachtruhe, Sperre und Schalter "Ansagen aus" stehen im Stamm. Ab Werk EIN: ansage_werk_block() in den Vorgaben, also nur fuer einen
+ * nie gespeicherten Block; ein gespeicherter bleibt, auch 'aus'. Ein Minutenlauf und ein Dienst sprechen nie selbst: Sie legen den Anlass
+ * in <Daten>/ansage_warte.json, ein abgekoppelter Sender (php -r, eigene Sperre) spricht und wartet auf die Lautsprecher.
+ */
+
+/** So alt darf ein wartender Anlass werden (nach einem Update oder Hang wird nichts Aufgestautes angesagt). */
+if (!defined('MO_ANSAGE_HOECHSTALTER')) { define('MO_ANSAGE_HOECHSTALTER', 600); }
+
+/** Die Regeln: gespeichert und gueltig, sonst aus einer alten Einstellung dieser Linie, sonst die Vorgabe (mit Nachtruhe). */
+function mo_ansage_regeln($cfg = null)
+{
+    if ($cfg === null) { $cfg = mo_config(); }
+    $g = '';
+    if (isset($cfg['ansage_regeln'])) {
+        $r = ansage_regeln_wert($cfg['ansage_regeln'], $g);
+        return $r === null ? ansage_regeln_vorgaben() : $r;
+    }
+    $r = ansage_regeln_vorgaben();
+    $p = ansage_regeln_wert($r, $g);
+    return $p === null ? ansage_regeln_vorgaben() : $p;
+}
+
+/** Die Warteliste unter einer Dateisperre aendern: $fn(Liste) -> array(neue Liste, Ergebnis). */
+function mo_ansage_warte($fn)
+{
+    $d = mo_paths()['datadir'];
+    if (!is_dir($d)) { @mkdir($d, 0775, true); }
+    $f = $d . '/ansage_warte.json';
+    $h = @fopen($f, 'c+');
+    if ($h === false) { return null; }
+    if (!flock($h, LOCK_EX)) { fclose($h); return null; }
+    $alt = json_decode((string) stream_get_contents($h), true);
+    list($neu, $erg) = call_user_func($fn, is_array($alt) ? $alt : array());
+    rewind($h);
+    ftruncate($h, 0);
+    fwrite($h, (string) json_encode($neu));
+    fflush($h);
+    flock($h, LOCK_UN);
+    fclose($h);
+    @chmod($f, 0600);
+    return $erg;
+}
+
+/**
+ * Anlaesse hinlegen und den Sender starten; wartet auf nichts. $l: Eintraege fuer ansage_regel_sprechen() (schluessel, text, dringend,
+ * sperre_min, nur_nach). Die Schale schliesst vor dem exec jede Deskriptor-Nummer ueber 2, sonst erbte der Sender die Sperren des Rufers.
+ */
+function mo_ansage_legen(array $l, $jetzt = null)
+{
+    if (!$l) { return 'nichts'; }
+    $jetzt = $jetzt === null ? time() : (int) $jetzt;
+    mo_ansage_warte(function ($alt) use ($l, $jetzt) {
+        foreach ($l as $e) { $alt[] = $e + array('zeit' => $jetzt); }
+        return array(array_slice($alt, -50), null);
+    });
+    $php = (defined('PHP_BINARY') && PHP_BINARY !== '' && is_executable(PHP_BINARY) && stripos(basename(PHP_BINARY), 'php') === 0 && stripos(basename(PHP_BINARY), 'fpm') === false) ? PHP_BINARY : 'php';
+    $befehl = 'for f in /proc/$$/fd/*; do n=${f##*/}; [ "$n" -gt 2 ] 2>/dev/null && eval "exec $n>&-"; done; '
+            . 'exec ' . escapeshellarg($php) . ' -r ' . escapeshellarg('chdir(dirname($argv[1])); $_SERVER["SCRIPT_FILENAME"] = $_SERVER["PHP_SELF"] = $argv[1]; require $argv[1]; mo_ansage_senden();') . ' -- ' . escapeshellarg(__FILE__);
+    $aus = array();
+    $rc = 1;
+    @exec('bash -c ' . escapeshellarg($befehl) . ' </dev/null >/dev/null 2>&1 &', $aus, $rc);
+    return $rc === 0 ? 'gestartet' : 'kein_start';
+}
+
+/** Das Sprechtoken aus Alexa-NG und Chromecast4lox uebernehmen (Stamm 1.3.1). Schreibt NUR bei einer Aenderung, nennt nie das Token. */
+function mo_ansage_token_pflegen($cfg = null)
+{
+    if ($cfg === null) { $cfg = mo_config(); }
+    list($neu, $her2, $g) = ansage_token_abgleich(mo_tts($cfg), isset($cfg['ansage_token_herkunft']) ? $cfg['ansage_token_herkunft'] : array(), mo_ansage_k());
+    if (!$g) { return false; }
+    $cfg = mo_config();
+    $cfg['tts'] = $neu;
+    $cfg['ansage_token_herkunft'] = $her2;
+    if (!mo_config_speichern($cfg)) { return false; }
+    mo_log('Ansage: Sprechtoken uebernommen (' . implode(', ', $g) . ').');
+    return true;
+}
+
+/** Der Block fuer Testansage und Pruefzeile: uebernommene Token aufgeloest. Nur im Speicher. */
+function mo_ansage_vor_ort($cfg = null)
+{
+    if ($cfg === null) { $cfg = mo_config(); }
+    return ansage_token_fuer_lauf(mo_tts($cfg), isset($cfg['ansage_token_herkunft']) ? $cfg['ansage_token_herkunft'] : array(), mo_ansage_k());
+}
+
+/** Der Block fuer die Pruefzeile: nur die eingerichteten Ziele; ist keines eingerichtet, sagt die Zeile "aus" statt eines Kreuzes. */
+function mo_ansage_pruefblock($cfg = null)
+{
+    if ($cfg === null) { $cfg = mo_config(); }
+    $t = mo_tts($cfg);
+    if ($t['mode'] === 'aus') { return $t; }
+    list($b) = ansage_ziele_bereit(mo_ansage_vor_ort($cfg), mo_ansage_k());
+    if ($b === null) { $t['mode'] = 'aus'; return $t; }
+    return $b;
+}
+
+/** Die Lage im Reiter Test: Ziele, Nachtruhe, Schalter. Nur im geoeffneten Reiter (der Schalter fragt den Broker). */
+function mo_ansage_lage_html($cfg = null)
+{
+    if ($cfg === null) { $cfg = mo_config(); }
+    $k = mo_ansage_k();
+    $o = array();
+    foreach (ansage_regel_lage(mo_tts($cfg), mo_ansage_regeln($cfg), $k, true) as $z) {
+        $o[] = '<div class="sm-hilfe">' . htmlspecialchars((string) $z[1], ENT_QUOTES, 'UTF-8') . '</div>';
+    }
+    return implode("\n", $o) . "\n";
+}
+
+/** Die Felder der Regeln fuer die Einmalmeldung (X-2). */
+function mo_ansage_regel_felder(array $anlaesse = array())
+{
+    return ansage_regeln_x2_felder($anlaesse);
+}
+
+/**
+ * Im Vorgang sprechen, wo der Rufer das Ergebnis braucht (Antwort an Loxone, Befehl): Regeln aus dem Stamm mit "dringend, ohne Sperre" - es zaehlt nur der Schalter.
+ * Schalter gesetzt: stand -1, Kennung SCHALTER. Nichts bereit oder Original-Audioserver: wie bisher ansage_sprechen(), damit die Antwort sagt, was fehlt.
+ */
+function mo_ansage_direkt($text, array $e = array(), $tts = null)
+{
+    $conf = mo_config();
+    $k = mo_ansage_k();
+    $t = $tts === null ? mo_tts($conf) : $tts;
+    $a = ansage_regel_sprechen(array($e + array('schluessel' => 'direkt', 'text' => (string) $text, 'dringend' => true, 'sperre_min' => 0)), $t, mo_ansage_regeln($conf), $k);
+    if ($a['r'] !== null) { return $a['r']; }
+    if ($a['regel'] === 'SCHALTER') {
+        return array('stand' => -1, 'kennung' => 'SCHALTER', 'art' => isset($t['mode']) ? (string) $t['mode'] : '-', 'http' => 0, 'zeile' => '', 'zeichen' => 0);
+    }
+    return ansage_sprechen((string) $text, $t, $k);
+}
+
+/**
+ * Der Sender: eigene Sperre, nimmt die Warteliste und spricht nach den Regeln. "aus" und "kein Ziel eingerichtet" hinterlassen keine Zeile;
+ * ein gescheitertes Ziel genau eine je Aenderung (ab Werk EIN darf kein Protokoll vollaufen). Text und Token stehen nie im Protokoll.
+ */
+function mo_ansage_senden($jetzt = null)
+{
+    $d = mo_paths()['datadir'];
+    if (!is_dir($d)) { @mkdir($d, 0775, true); }
+    $fh = @fopen($d . '/ansage_senden.lock', 'c');
+    if ($fh === false || !flock($fh, LOCK_EX | LOCK_NB)) { return 'laeuft'; }
+    $erg = 'nichts';
+    $l = mo_ansage_warte(function ($alt) { return array(array(), $alt); });
+    $jetzt = $jetzt === null ? time() : (int) $jetzt;
+    $frisch = array();
+    foreach (is_array($l) ? $l : array() as $e) {
+        if (is_array($e) && isset($e['zeit']) && $jetzt - (int) $e['zeit'] <= MO_ANSAGE_HOECHSTALTER) { $frisch[] = $e; }
+    }
+    if ($frisch) {
+        $conf = mo_config();
+        mo_ansage_token_pflegen($conf);
+        $conf = mo_config();
+        $a = ansage_regel_sprechen($frisch, mo_tts($conf), mo_ansage_regeln($conf), mo_ansage_k());
+        $erg = $a['regel'] !== '' ? $a['regel'] : 'gesprochen';
+        if ($a['r'] !== null) {
+            $merk = $d . '/ansage_lage.txt';
+            $lage = $a['r']['stand'] === 1 ? 'gesprochen' : ansage_kurz($a['r']);
+            if ($a['r']['stand'] === 1 || (string) @file_get_contents($merk) !== $lage) { mo_log('Ansage: ' . ansage_regel_kurz($a)); }
+            @file_put_contents($merk, $lage);
+        } elseif ($a['regel'] !== 'AUS' && $a['regel'] !== 'KEIN_ZIEL') {
+            mo_log('Ansage entfaellt: ' . ansage_regel_kurz($a));
+        }
+    }
+    flock($fh, LOCK_UN);
+    fclose($fh);
+    return $erg;
+}
+
 function mo_ansage_k()
 {
     return array(
@@ -3076,7 +3250,7 @@ function mo_tts()
 function mo_say($text)
 {
     $k = mo_ansage_k();
-    $r = ansage_sprechen((string) $text, mo_tts(), $k);
+    $r = ansage_sprechen((string) $text, mo_ansage_vor_ort(), $k);
     mo_log('Ansage: ' . ansage_kurz($r));
     return array($r['stand'] === 1, $r['stand'] === 1 ? '' : ansage_kennung_text($r['kennung'], $k), $r['zeile']);
 }
@@ -3222,7 +3396,14 @@ function mo_events_check() {
              * der Ansagetext - ins Protokoll kommen nur die Anlaesse und seine Laenge. Der Satz
              * selbst steht weiter in anntext_<n> (Zwischenordner). */
             mo_log('Meldung: ' . implode(', ', array_keys($meldungen)) . ' (' . ansage_zeichen($meldung) . ' Zeichen)');
-            if (!empty($cfg['notify']['audio'])) { mo_say('Hallo! ' . $meldung); }
+            if (!empty($cfg['notify']['audio'])) {     /* 1.1.27: je Anlass ein Eintrag (Sperre, Nachtruhe aus dem Stamm), gesprochen in einem eigenen Vorgang */
+                $mo_legen = array();
+                foreach ($meldungen as $mo_ma => $mo_mt) {
+                    $mo_legen[] = array('schluessel' => $mo_ma . '|' . $n, 'text' => ($mo_legen ? '' : 'Hallo! ') . $mo_mt);
+                }
+                mo_ansage_token_pflegen($cfg);
+                mo_ansage_legen($mo_legen);
+            }
         }
         /* A3 (06.09.2026, gemessen): bis 1.1.5 wurde hier auch der Fehlwert
          * -1 gespeichert. Vier Cron-Laeufe (parkt, maeht, Abriss, parkt):
@@ -3758,6 +3939,7 @@ function mo_sicherung_erzeugen($mit_warnung = true)
     $cfg = mo_config();
     /* Ansage-2 (Durchgang 01.10.2026): das Sprechtoken von Alexa-NG reist
      * nicht mit - beim Zurueckspielen bleibt das geltende stehen. */
+    unset($cfg['ansage_token_herkunft']);     // 1.1.27
     if (isset($cfg['tts']) && is_array($cfg['tts'])) { $cfg['tts'] = ansage_sicherung_bereinigen($cfg['tts']); }   // Nr. 36 b: eine Quelle
     $kopf = array(
         '_hinweis' => 'Einstellungen des LoxBerry-Plugins Rasenmaeher (Robonect). '
@@ -4128,6 +4310,15 @@ function mo_sicherung_lesen($roh)
         /* Der lesbare Kopf (_hinweis, _stand, _plugin, _warnung) wird
          * UEBERGANGEN, nicht beanstandet - er ist keine Einstellung. */
         if ($ks !== '' && $ks[0] === '_') { continue; }
+        if ($k === 'ansage_token_herkunft') { continue; }     // S2: nie aus einer Datei
+        if ($k === 'ansage_regeln') {     // S2: ungueltig = abgewiesen, gueltig = uebernommen
+            $s2_g = '';
+            $s2_r = ansage_regeln_wert($w, $s2_g);
+            if ($s2_r === null) {  continue; }
+            $neu['ansage_regeln'] = $s2_r;
+            
+            continue;
+        }
         if (!in_array($ks, $bekannt, true)) {
             $mangel[] = sprintf(mo_t('TEXT.SICH_FREMD'),
                                  htmlspecialchars($ks, ENT_QUOTES, 'UTF-8'));

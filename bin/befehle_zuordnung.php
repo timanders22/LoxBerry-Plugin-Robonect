@@ -68,7 +68,8 @@ return array(
         return mo_befehle_einstellungen();
     },
     'protokoll' => function ($stufe, $text) {
-        mo_log('Befehlsbruecke ' . ($stufe === 'INFO' ? '' : $stufe . ': ') . $text);
+        // 1.1.27: bb_log() setzt "Befehlsbruecke: " schon vor den Text - bis 1.1.26 stand es doppelt (Nachzug 01.11.2026, wie MGiSmart 1.1.30).
+        mo_log(($stufe === 'INFO' ? '' : $stufe . ': ') . $text);
     },
     // Maeher 2 bis 9 (mo_max_maeher() = 9); Maeher 1 hat den Namen ohne Nummer
     'teile' => array('nr' => '[2-9]'),

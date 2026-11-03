@@ -418,7 +418,7 @@ if ($mw_ist_post && isset($_POST['token_neu'])) {
  * aktiv" - der Knopf ist die Probe der Einstellungen (wie bis 1.1.17). --- */
 if ($mw_ist_post && isset($_POST['tts_test'])) {
     $mw_ak = mo_ansage_k();
-    $mw_ar = ansage_testansage(mo_tts(), $mw_ak);
+    $mw_ar = ansage_testansage(mo_ansage_vor_ort(), $mw_ak);
     mo_log('Testansage: ' . ansage_kurz($mw_ar));
     if ($mw_ar['stand'] === 1) {
         $mw_ok[] = sprintf(mo_t('TEXT.TESTANSAGE_OK'), mw_e((string) $mw_ar['art']));
@@ -441,9 +441,9 @@ if ($mw_ist_post && (isset($_POST['ansage_test']) || isset($_POST['ansage_test_z
     if (isset($_POST['ansage_test_ziel']) && $mw_tnur === 0) {
         $mw_tr = array('stand' => 0, 'kennung' => 'ZIEL_UNBEKANNT|-', 'art' => '-', 'http' => 0, 'zeile' => '', 'zeichen' => 0);
     } elseif ($mw_tnur >= 1) {
-        $mw_tr = ansage_testansage(mo_tts(), $mw_tk, $mw_tnur);
+        $mw_tr = ansage_testansage(mo_ansage_vor_ort(), $mw_tk, $mw_tnur);
     } else {
-        $mw_tr = ansage_testansage(mo_tts(), $mw_tk);
+        $mw_tr = ansage_testansage(mo_ansage_vor_ort(), $mw_tk);
     }
     mo_log('Testansage' . ($mw_tnur >= 1 ? ' an Ziel ' . $mw_tnur : '') . ': ' . ansage_kurz($mw_tr));
     if ($mw_tr['stand'] === 1) {
@@ -583,7 +583,8 @@ if ($mw_ist_post && isset($_POST['save'])) {
     $mw_tbean = array();
     $mw_thinw = array();     // Welle Mehrfach-Ziele (Sprachmodul 1.2.1): Hinweise des Moduls, die das Speichern nicht verhindern
     $mw_tts_neu = ansage_formular_lesen($_POST, mo_tts(), $mw_tmangel, $mw_tbean,
-        mo_ansage_opt() + array('ziele' => mo_mit_zielen()), mo_ansage_k(), $mw_thinw);
+        mo_ansage_opt() + array('ziele' => mo_mit_zielen(), 'token_vor_ort' => true, 'aus_gewinnt' => true), mo_ansage_k(), $mw_thinw);
+    list($mw_neu['ansage_regeln']) = ansage_regeln_formular($_POST, mo_ansage_regeln(), array(), $mw_tmangel, $mw_tbean, mo_ansage_k());     // S2: Wann gesprochen wird (Stamm)
     /* Robonect-eigen (C6, Durchgang 01.10.2026, Nr. 19): leere Zonen werden beanstandet wie bis 1.1.17 -
      * die Sprachausgabe 1.1.1 nimmt '' als "keine Angabe" und spricht dann still in Zone 1. */
     if (!in_array('tts_zones', $mw_tbean, true) && is_string($mw_tts_neu['zones']) && trim($mw_tts_neu['zones']) === '') {
@@ -676,7 +677,7 @@ function mw_falsch($feld)
 /* ================= Anzeigedaten ================= */
 
 $mw_notify = is_array($mw_cfg['notify']) ? $mw_cfg['notify'] : array();
-$mw_notify += array('audio' => 0, 'push' => 0, 'fehler' => 1, 'fertig' => 1, 'messer' => 1, 'akku' => 0);
+$mw_notify += array('audio' => 1, 'push' => 0, 'fehler' => 1, 'fertig' => 1, 'messer' => 1, 'akku' => 0);
 list($mw_tts) = ansage_vervollstaendigen(is_array($mw_cfg['tts']) ? $mw_cfg['tts'] : array(), 'musicserver');
 /* C7 (X-3): wuerde die eigene Sicherung abgewiesen? Nur Namen. */
 $mw_sich_mangel = mo_sicherung_mangel();
@@ -1004,7 +1005,12 @@ echo ansage_formular_html($mw_tts, array(
     'namen' => mo_ansage_opt()['namen'],
     /* Welle Mehrfach-Ziele (Sprachmodul 1.2.1): Tabelle der weiteren Ausgabeziele; nach einer Beanstandung traegt sie das Eingetippte. */
     'ziele' => mo_mit_zielen(),
-    'ziele_post' => (mw_x2('einst') && isset($mw_eingaben['werte']) && is_array($mw_eingaben['werte'])) ? mo_ziele_x2_post($mw_eingaben['werte']) : null), mo_ansage_k()); ?>
+    'ziele_post' => (mw_x2('einst') && isset($mw_eingaben['werte']) && is_array($mw_eingaben['werte'])) ? mo_ziele_x2_post($mw_eingaben['werte']) : null), mo_ansage_k());
+echo ansage_regeln_html(mo_ansage_regeln(), array(), array(), array(
+    'w' => function ($n, $g) { return mw_wert('einst', $n, $g); },
+    'm' => function ($n) { return mw_falsch($n); },
+    'c' => function ($n, $g) { return mw_haken('einst', $n, $g); },
+    'token_vor_ort' => true), mo_ansage_k()); ?>
 
 <div class="sm-legende">
 <span><i class="sm-punkt sm-b-lesen"></i> <?php echo mw_e(mo_t('LEGENDE.LESEN')); ?></span>
@@ -1670,6 +1676,7 @@ $mw_bbz = mo_bruecke_pruefzeilen(); ?>
    ohne weitere Ziele nichts. */
 if (mo_mit_zielen()) { echo ansage_testknoepfe_html(mo_tts(), mo_ansage_k(), array('klasse' => 'sm-btn sm-b-aktion')); } ?>
 </form>
+<?= mo_ansage_lage_html() ?>
 </div>
 <div class="sm-small"><?php echo mo_t('TEXT.NACH_HAUSE_IST_DER_UNGEFHRLICHSTE_'); ?></div>
 
