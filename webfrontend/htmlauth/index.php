@@ -258,6 +258,7 @@ if ($mw_ist_post && (isset($_POST['vorlage']) || isset($_POST['vorlage_vo']))) {
     $mw_vd = (isset($_POST['vorlage_dev']) && is_string($_POST['vorlage_dev'])) ? trim($_POST['vorlage_dev']) : '1';
     if (preg_match('/^[1-9]$/', $mw_vd) === 1 && (int) $mw_vd <= max(1, count(mo_mowers()))) {
         list($mw_vname, $mw_vinhalt) = isset($_POST['vorlage_vo']) ? mo_vo_vorlage((int) $mw_vd) : mo_vorlage((int) $mw_vd);
+        while (ob_get_level() > 0) { @ob_end_clean(); }
         header('Content-Type: application/x-download');
         header('Content-Disposition: attachment; filename="' . $mw_vname . '"');
         echo $mw_vinhalt;
@@ -273,6 +274,7 @@ if ($mw_ist_post && (isset($_POST['vorlage']) || isset($_POST['vorlage_vo']))) {
 if ($mw_ist_post && isset($_POST['vorlage_bb'])) {
     $mw_bbv = mo_befehle_vorlage();
     if ($mw_bbv !== null) {
+        while (ob_get_level() > 0) { @ob_end_clean(); }
         header('Content-Type: application/x-download');
         header('Content-Disposition: attachment; filename="' . $mw_bbv[0] . '"');
         echo $mw_bbv[1];
@@ -293,6 +295,7 @@ if ($mw_ist_post && isset($_POST['vorlage_bb'])) {
 if ($mw_ist_post && isset($_POST['mo_sichern'])) {
     $mw_js = mo_sicherung_erzeugen();
     if ($mw_js !== false) {
+        while (ob_get_level() > 0) { @ob_end_clean(); }
         header('Content-Type: application/json; charset=utf-8');
         header('Content-Disposition: attachment; filename="' . mo_sicherung_name() . '"');
         echo $mw_js;
