@@ -18,6 +18,14 @@ Die Bausteine der beiden Baustein-Listen aus dem Reiter *Einbindung in Loxone* s
 auf den Seiten „Robonect“ und „Robonect Steuerung“ im [LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt),
 einer gemeinsamen Projektdatei mit allen Plugin-Seiten und Vorlagen.
 
+## Neu in 1.1.31
+
+- **Update:** Scheitert die Sicherung oder die Marke, bricht das Update ab und die bisherige Fassung bleibt.
+- **Sprechtoken:** Ein von Hand eingetragenes Alexa- oder Google-Token wird nicht mehr vom Token des Nachbar-Plugins überschrieben.
+- **Sicherung zurückspielen:** Ungültige Regeln der Sprachausgabe in der Datei werden gemeldet und die Datei wird abgewiesen, statt sie still zu übergehen.
+- **Fehler beim Mähen:** Fällt der Mäher beim Mähen aus, kommt nur noch die Fehlermeldung, nicht zugleich „ist mit dem Mähen fertig“, und der abgebrochene Lauf zählt nicht als Einsatz.
+- **Formular:** Ein beanstandeter Tafel- oder HomePod-Name bleibt zur Korrektur im Feld stehen. Auch die Nachtruhe bleibt nach einer Beanstandung so stehen, wie Sie sie eingetragen haben.
+
 ## Neu in 1.1.30
 
 - Vor einem Download wird jeder offene Ausgabepuffer geleert: PHP-Warnungen oder Reste landen nicht mehr in der heruntergeladenen Vorlage oder Sicherung.

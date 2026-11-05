@@ -1,6 +1,10 @@
 #!/bin/bash
 ARGV1=$1; ARGV3=$3; ARGV5=$5; ARGV6=$6
 PFOLDER="${ARGV3:-robonect}"
+# 05.11.2026: ein Ordnername mit "/" oder "." waere ein Pfad hinaus (dieselbe Formel wie MGiSmart und Govee).
+case "$PFOLDER" in
+    ''|.|..|*/*) echo "<FAIL> Unbrauchbarer Ordnername '$PFOLDER' - nichts angefasst."; exit 2 ;;
+esac
 # ------------------------------------------------------------------
 # Die Wurzel: GELESEN, nicht geraten (Nachlese 25.09.2026).
 # ------------------------------------------------------------------
@@ -40,7 +44,7 @@ if [ -z "$BASE" ] || [ ! -d "$BASE/config/plugins" ] || [ ! -d "$BASE/data/plugi
     echo "<WARNING> das fuenfte Argument noch \$LBHOMEDIR noch der eigene Ablageort fuehrten"
     echo "<WARNING> auf einen Ordner mit config/plugins und data/plugins."
     echo "<WARNING> Es wurde nichts angelegt, gesichert oder zurueckgespielt."
-    exit 1
+    exit 2
 fi
 MARKE="$BASE/data/plugins/$PFOLDER.upgrade_laeuft"
 
@@ -60,9 +64,11 @@ MARKE="$BASE/data/plugins/$PFOLDER.upgrade_laeuft"
 date +%s > "$MARKE" 2>/dev/null
 case "$(cat "$MARKE" 2>/dev/null)" in
     ''|*[!0-9]*)
-        echo "<WARNING> Die Upgrade-Marke liess sich nicht mit der Uhrzeit anlegen ($MARKE)."
-        echo "<WARNING> Laeuft der Minutentakt waehrend der Installation, holt postupgrade.sh"
-        echo "<WARNING> Laufzaehler, Fehlerhistorie und Statistik trotzdem nach Inhalt zurueck."
+        # 05.11.2026: ohne Marke haelt die Installation das Update fuer eine Neuinstallation und legt die Einstellungen beiseite; bis hierher nur eine Warnung.
+        rm -f "$MARKE" 2>/dev/null
+        echo "<FAIL> Die Marke $MARKE liess sich nicht anlegen - die Aktualisierung wird abgebrochen,"
+        echo "<FAIL> die bisherige Fassung bleibt unveraendert installiert."
+        exit 2
         ;;
     *)
         # <INFO>, nicht <OK>: das Protokoll traegt sein <OK> erst in der
@@ -87,6 +93,37 @@ fi
 # lag allein daran, dass der Installer die Hakenskripte mit cd "$tempfolder"
 # startet. Ausgeschrieben ist besser als geerbt - der Rueckfall auf $1 haelt
 # den bisherigen Weg offen.
+# ---------- Update-Schutz (05.11.2026, Bauart Govee 0.9.34) ----------
+# plugininstall.pl bricht nur bei Rueckgabewert >1 vor purge_installation ab. Die Kopie entsteht als <Ziel>.neu.<pid>, traegt 0600,
+# BEVOR Inhalt hineinkommt, wird mit cmp verglichen und erst dann per mv an ihren Platz gestellt: eine heile Sicherung bleibt heil.
+ZS_FEHL=""
+zs_hinlegen() {   # $1 Quelle, $2 Ziel
+    [ -d "$2" ] && return 1
+    zs_neu="$2.neu.$$"
+    rm -f "$zs_neu" 2>/dev/null
+    if { : > "$zs_neu"; } 2>/dev/null && chmod 600 "$zs_neu" 2>/dev/null \
+       && cp "$1" "$zs_neu" 2>/dev/null && cmp -s "$1" "$zs_neu" \
+       && mv -f "$zs_neu" "$2" 2>/dev/null; then
+        return 0
+    fi
+    rm -f "$zs_neu" 2>/dev/null
+    return 1
+}
+zs_sichere() {   # $1 Quelle, $2 Ziel: fehlt die Datei oder ist sie leer, ist ein Fehlschlag keiner
+    [ -f "$1" ] || return 0
+    zs_hinlegen "$1" "$2" && return 0
+    [ -s "$1" ] || return 1
+    echo "<WARNING> $(basename "$1") liess sich nicht sichern ($2)."
+    ZS_FEHL="$ZS_FEHL $(basename "$1")"
+    return 1
+}
+zs_schluss() {   # Fehlschlag gesammelt: Marke weg, Abbruch vor purge_installation
+    [ -n "$ZS_FEHL" ] || return 0
+    echo "<FAIL> Nicht gesichert:$ZS_FEHL - die Aktualisierung wird abgebrochen, damit der Purge die Originale nicht loescht."
+    echo "<FAIL> Die bisherige Fassung bleibt installiert. Bitte Platz und Rechte unter config/plugins und data/plugins pruefen."
+    rm -f "$MARKE" 2>/dev/null
+    exit 2
+}
 WORK="${ARGV6:-$ARGV1}"
 mkdir -p "$WORK" 2>/dev/null
 
@@ -101,7 +138,7 @@ mkdir -p "$WORK" 2>/dev/null
 # Installationsprotokoll wie ein ueberstandener Schaden.
 : > "$WORK/.aktualisierung" 2>/dev/null
 
-cp -p "$BASE/config/plugins/$PFOLDER/mower.json" "$WORK/mower.json" 2>/dev/null
+zs_sichere "$BASE/config/plugins/$PFOLDER/mower.json" "$WORK/mower.json"
 
 # ------------------------------------------------------------------
 # Der Datenordner ueberlebt ein Upgrade NICHT.
@@ -131,7 +168,7 @@ cp -p "$BASE/config/plugins/$PFOLDER/mower.json" "$WORK/mower.json" 2>/dev/null
 # nicht an.
 mkdir -p "$WORK/rettung" 2>/dev/null
 for F in lauf.json fehler.json statistik.json; do
-    cp -p "$BASE/data/plugins/$PFOLDER/$F" "$WORK/rettung/$F" 2>/dev/null
+    zs_sichere "$BASE/data/plugins/$PFOLDER/$F" "$WORK/rettung/$F"
 done
 
 # A27 (06.09.2026, gemessen): das Protokoll wird NICHT mehr gesichert.
@@ -140,4 +177,5 @@ done
 # bleibt es liegen. Die Sicherung war ueberfluessig, und das unbedingte
 # Zurueckspielen in postupgrade.sh warf alles weg, was zwischen den beiden
 # Skripten hineingeschrieben wurde.
+zs_schluss
 exit 0

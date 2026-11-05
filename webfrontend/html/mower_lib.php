@@ -3354,15 +3354,22 @@ function mo_events_check() {
         /* Eine stehengebliebene Uhr wird verworfen, statt irgendwann eine
          * Laufzeit von Tagen in die Statistik zu schreiben. */
         if ($maeh_start > 0 && time() - $maeh_start > 86400) { $maeh_start = 0; }
-        if ($pcode === 2 && $st['code'] !== 2 && $st['code'] >= 0) {
+        if ($pcode === 2 && $st['code'] !== 2 && $st['code'] !== 5 && $st['code'] >= 0) {
             $min = ($maeh_start > 0) ? (int) round((time() - $maeh_start) / 60) : 0;
             if ($min <= 0 && (int) $st['dauer'] > 0) { $min = (int) $st['dauer']; }
-            mo_stat_einsatz($min);
-            $maeh_start = 0;
-            if (!empty($cfg['notify']['fertig'])) {
-                $meldungen['fertig'] = $st['name'] . ' ist mit dem Maehen fertig.'
-                         . ($min > 0 ? ' Laufzeit ' . $min . ' Minuten.' : '');
+            /* 1.1.31 (MO-1): die Uhr geht immer zurueck (A21), "fertig" und der Einsatzzaehler nur beim regulaeren Ende:
+             * 1 parkt, 3 sucht die Station, 4 laedt, 6 Abschluss, 17 schlaeft. Bis 1.1.30 hiess es bei 2 -> 7, 2 -> 8,
+             * 2 -> 16 und 2 -> 0 zugleich "meldet einen Fehler" und "ist mit dem Maehen fertig", und der abgebrochene
+             * Lauf zaehlte als Einsatz. Code 5 (sucht) ist kein Ende: der Merker bleibt auf 2, die Uhr laeuft, das
+             * Ende zaehlt beim naechsten Code (2 -> 5 -> 3). */
+            if (in_array($st['code'], array(1, 3, 4, 6, 17), true)) {
+                mo_stat_einsatz($min);
+                if (!empty($cfg['notify']['fertig'])) {
+                    $meldungen['fertig'] = $st['name'] . ' ist mit dem Maehen fertig.'
+                             . ($min > 0 ? ' Laufzeit ' . $min . ' Minuten.' : '');
+                }
             }
+            $maeh_start = 0;
         }
         // Akku schwach ausserhalb der Ladung
         if (!empty($cfg['notify']['akku']) && $st['batterie'] > 0 && $st['batterie'] < 20
@@ -3412,7 +3419,7 @@ function mo_events_check() {
          * richtig. Der Kommentar oben sagt "bei -1 wissen wir nichts und
          * lassen die Uhr laufen" - dann darf die -1 auch den zuletzt
          * GEMESSENEN Code nicht ueberschreiben. */
-        mo_write_json($f, array('code' => ($st['code'] >= 0 ? $st['code'] : $pcode),
+        mo_write_json($f, array('code' => (($st['code'] >= 0 && !($st['code'] === 5 && $pcode === 2)) ? $st['code'] : $pcode),
                                 'ts' => time(), 'maeh_start' => $maeh_start));
     }
     foreach (array('messer_', 'akku_') as $pre) {
@@ -4314,7 +4321,11 @@ function mo_sicherung_lesen($roh)
         if ($k === 'ansage_regeln') {     // S2: ungueltig = abgewiesen, gueltig = uebernommen
             $s2_g = '';
             $s2_r = ansage_regeln_wert($w, $s2_g);
-            if ($s2_r === null) {  continue; }
+            if ($s2_r === null) {     // 1.1.31: bis 1.1.30 stillschweigend uebergangen, die Datei galt als heil
+                $mangel[] = sprintf(mo_t('TEXT.SICH_WERT'), mo_nennen_e('config.ansage_regeln'));
+                $namen[] = 'config.ansage_regeln';
+                continue;
+            }
             $neu['ansage_regeln'] = $s2_r;
             
             continue;

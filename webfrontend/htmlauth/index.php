@@ -224,7 +224,8 @@ function mw_eingaben_sammeln($formular, array $falsch)
     $namen = ($formular === 'mqtt') ? array('mqtt_enabled', 'mqtt_topic', 'befehle_mqtt_ein', 'befehle_mqtt_steuern')
         : array_merge(array('cache_sec', 'blade_hours', 'blade_base', 'stat_ein', 'notify_audio', 'notify_push',
                 'n_fehler', 'n_fertig', 'n_messer', 'n_akku'),
-                ansage_x2_felder(mo_ansage_opt()));     // Nr. 36 b, Stufe 2: ohne die Sprechtoken
+                ansage_x2_felder(mo_ansage_opt()),     // Nr. 36 b, Stufe 2: ohne die Sprechtoken
+                ansage_regeln_x2_felder(), array('ansage_tafel_ein', 'ansage_tafel_namen', 'ansage_homepod_ein', 'ansage_homepod_geraet'));     // 1.1.31: Nachtruhe, Tafel und HomePod; ohne Eintrag zeigte mw_wert() leer, mw_haken() aus
     $werte = array();
     foreach ($namen as $n) {
         if (isset($_POST[$n]) && is_string($_POST[$n])) { $werte[$n] = substr($_POST[$n], 0, 600); }
@@ -588,6 +589,8 @@ if ($mw_ist_post && isset($_POST['save'])) {
     $mw_tts_neu = ansage_formular_lesen($_POST, mo_tts(), $mw_tmangel, $mw_tbean,
         mo_ansage_opt() + array('ziele' => mo_mit_zielen(), 'token_vor_ort' => true, 'aus_gewinnt' => true), mo_ansage_k(), $mw_thinw);
     list($mw_neu['ansage_regeln']) = ansage_regeln_formular($_POST, mo_ansage_regeln(), array(), $mw_tmangel, $mw_tbean, mo_ansage_k());     // S2: Wann gesprochen wird (Stamm)
+    // 1.1.31: ein eingetipptes oder geloeschtes Sprechtoken ist nicht mehr vom Nachbarn; bis 1.1.30 ueberschrieb es der naechste Abgleich.
+    $mw_neu['ansage_token_herkunft'] = ansage_token_herkunft_formular($_POST, isset($mw_neu['ansage_token_herkunft']) ? $mw_neu['ansage_token_herkunft'] : array(), mo_ansage_opt());
     /* Robonect-eigen (C6, Durchgang 01.10.2026, Nr. 19): leere Zonen werden beanstandet wie bis 1.1.17 -
      * die Sprachausgabe 1.1.1 nimmt '' als "keine Angabe" und spricht dann still in Zone 1. */
     if (!in_array('tts_zones', $mw_tbean, true) && is_string($mw_tts_neu['zones']) && trim($mw_tts_neu['zones']) === '') {
