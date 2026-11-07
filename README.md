@@ -18,6 +18,11 @@ Die Bausteine der beiden Baustein-Listen aus dem Reiter *Einbindung in Loxone* s
 auf den Seiten „Robonect“ und „Robonect Steuerung“ im [LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt),
 einer gemeinsamen Projektdatei mit allen Plugin-Seiten und Vorlagen.
 
+## Neu in 1.1.33
+
+- **Reiter *Test* meldet nach dem Speichern der Einstellungen keinen Konfigurationsfehler mehr.** Bis 1.1.32 galten die Einstellung der Sprachausgabe „Wann gesprochen wird“ und die Herkunft übernommener Sprechtoken als fremde Schlüssel; sobald sie in der Konfiguration standen, zeigte die Zeile „Konfiguration vollständig“ ein Kreuz, obwohl nichts beschädigt war.
+- Beim Zurückspielen einer Sicherung bleiben übernommene Sprechtoken übernommen. Eine Sicherung aus einer früheren Fassung wird weiter angenommen.
+
 ## Neu in 1.1.32
 
 - Gemeinsames Sprachmodul 1.4.2: Wird eine Ansage bewusst nicht gesprochen (gerade eben schon gesagt, gesperrt oder Ruhezeit), steht das im Protokoll jetzt so – und nicht mehr als Fehler.

@@ -250,6 +250,12 @@ function mo_vorgaben()
     'tts' => array(),
     'aktionstoken' => '',          // schuetzt ?cmd= (unangemeldeter Endpunkt)
     'stat_ein' => 0,              // Einsatzstatistik fuehren (ab Werk AUS)
+    /* 1.1.33: die beiden Schluessel des Sprachmoduls (Regeln "Wann gesprochen wird", Herkunft uebernommener Sprechtoken).
+     * Bis 1.1.32 fehlten sie hier: das Formular und mo_ansage_token_pflegen() schrieben sie in mower.json, mo_cfg_lage()
+     * nannte sie "fremd", und der Reiter Test zeigte in "Konfiguration vollstaendig" ein Kreuz (am Geraet 07.11.2026:
+     * mower.json traegt ansage_token_herkunft). Bauart Saugroboter 1.1.33 / Pumpenwacht 1.0.16. */
+    'ansage_regeln' => ansage_regeln_vorgaben(),
+    'ansage_token_herkunft' => array(),
 );
 }
 
@@ -3034,6 +3040,11 @@ function mo_sicherung_spaet($neu, $jetzt)
             (isset($jetzt['tts']) && is_array($jetzt['tts'])) ? $jetzt['tts'] : null);
     }
     foreach ($mw_spaete as $mw_sn) { $liste[] = $mw_sn; }     // Welle Mehrfach-Ziele: tts.ziele (Spaetliste)
+    /* 1.1.33: die Herkunft der Sprechtoken kommt nie aus einer Datei; die geltende bleibt - ein uebernommenes Token
+     * bleibt uebernommen. Bis 1.1.32 fiel sie beim Zurueckspielen weg. */
+    list($mw_h, $mw_hl) = mo_wert_pruefen('ansage_token_herkunft',
+        (is_array($jetzt) && isset($jetzt['ansage_token_herkunft'])) ? $jetzt['ansage_token_herkunft'] : array());
+    $neu['ansage_token_herkunft'] = $mw_hl ? array() : $mw_h;
     return array($neu, $liste);
 }
 
@@ -4229,6 +4240,19 @@ function mo_wert_pruefen($k, $v)
         case 'befehle_mqtt_ein':
         case 'befehle_mqtt_steuern':
         case 'stat_ein':     return mo_zahl_pruefen($k, $v, 0, 1);
+        case 'ansage_regeln':     // 1.1.33: gegen den Stamm, wie mo_sicherung_lesen()
+            $g = '';
+            $r = ansage_regeln_wert($v, $g);
+            return $r !== null ? array($r, array())
+                : array(null, array(mo_mangel('', $k, sprintf(mo_t('TEXT.SICH_WERT'), mo_nennen_e($k)))));
+        case 'ansage_token_herkunft':     // 1.1.33: nur Namen der Sprechtoken mit dem Vermerk 'nachbar'
+            if (!is_array($v)) { return array(null, array(mo_mangel('', $k, sprintf(mo_t('TEXT.SICH_WERT'), mo_nennen_e($k))))); }
+            foreach ($v as $hk => $hv) {
+                if (!in_array((string) $hk, array_values(ansage_token_felder()), true) || $hv !== 'nachbar') {
+                    return array(null, array(mo_mangel('', $k, sprintf(mo_t('TEXT.SICH_WERT'), mo_nennen_e($k)))));
+                }
+            }
+            return array($v, array());
     }
     return array(null, array(mo_mangel('', $k, sprintf(mo_t('TEXT.SICH_FREMD'),
         htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8')))));   // A22
@@ -4365,6 +4389,7 @@ function mo_sicherung_lesen($roh)
         /* Gruppe 2 / MQTT (1.1.24): die Haken der Befehlsbruecke kennt eine Sicherung bis 1.1.23 nicht - dann gilt
          * ihre Vorgabe (aus); sonst waere jede aeltere Sicherung abgewiesen. */
         if (in_array($fk, mo_spaet_schluessel(), true)) { continue; }
+        if ($fk === 'ansage_token_herkunft') { continue; }     // 1.1.33: steht nie in einer Sicherung (mo_sicherung_spaet())
         if (!array_key_exists($fk, $daten)) {
             $fehlend[] = $fk;
         }
@@ -5303,7 +5328,9 @@ function mo_bruecke_pruefzeilen()
  *  Haken der Befehlsbruecke ab Werk aus) - sonst wiese das Zurueckspielen jede Sicherung bis 1.1.23 ab. */
 function mo_spaet_schluessel()
 {
-    return array('befehle_mqtt_ein', 'befehle_mqtt_steuern');
+    /* 1.1.33: ansage_regeln - bis 1.1.32 stand der Schluessel nicht in mo_vorgaben(); eine aeltere Sicherung kennt
+     * ihn trotzdem (mo_sicherung_erzeugen() gab die ganze Konfiguration aus). Fehlt er, gelten die Regeln ab Werk. */
+    return array('befehle_mqtt_ein', 'befehle_mqtt_steuern', 'ansage_regeln');
 }
 
 /* Der Escape-Helfer gehoert in die Bibliothek, nicht in
