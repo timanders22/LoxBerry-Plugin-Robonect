@@ -18,6 +18,10 @@ Die Bausteine der beiden Baustein-Listen aus dem Reiter *Einbindung in Loxone* s
 auf den Seiten „Robonect“ und „Robonect Steuerung“ im [LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt),
 einer gemeinsamen Projektdatei mit allen Plugin-Seiten und Vorlagen.
 
+## Neu in 1.1.34
+
+- Gemeinsames Sprachmodul 1.4.3: Als LoxBerry-Wurzel aus `LBHOMEDIR` gilt für die Sprachausgabe nur noch ein Ordner mit `config/plugins`, `data/plugins` und `config/system/general.json`; bis 1.4.2 genügte `config/system`, und ein Prüfstand oder Rest mit diesem Ordner wurde wie ein LoxBerry gelesen. Auf einem LoxBerry ändert sich nichts.
+
 ## Neu in 1.1.33
 
 - **Reiter *Test* meldet nach dem Speichern der Einstellungen keinen Konfigurationsfehler mehr.** Bis 1.1.32 galten die Einstellung der Sprachausgabe „Wann gesprochen wird“ und die Herkunft übernommener Sprechtoken als fremde Schlüssel; sobald sie in der Konfiguration standen, zeigte die Zeile „Konfiguration vollständig“ ein Kreuz, obwohl nichts beschädigt war.
