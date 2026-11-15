@@ -25,6 +25,11 @@ date_default_timezone_set('Europe/Berlin');
  * beim Einbinden nur Funktionen an und schuetzt sich selbst gegen doppeltes Laden. */
 require_once __DIR__ . '/sprachausgabe.php';
 
+/* 1.1.35: Gemeinsames Sicherungsmodul (Abschrift von Werkzeuge/gemeinsam/sicherung.php, Modul 1.2.3) fuer
+ * "Einstellungen sichern" und "Einstellungen zurueckspielen" - mo_sicherung_beschreibung(). Liegt neben dieser
+ * Datei, legt beim Einbinden nur Funktionen an und schuetzt sich selbst gegen doppeltes Laden. */
+require_once __DIR__ . '/sicherung.php';
+
 
 /* Den LoxBerry-Wurzelordner ohne festen Systempfad bestimmen.
  *
@@ -3026,27 +3031,9 @@ function mo_ziele_x2_post(array $werte)
     return isset($p['tts_ziel_art']) ? $p : null;
 }
 
-/** Welle Mehrfach-Ziele (1.1.25): beim Zurueckspielen die Spaetliste (Stueck d) - $neu aus mo_sicherung_lesen() (geht von
- *  den Vorgaben aus), $jetzt die geltende Einstellung. Rueckgabe: array(neu, Namen der behaltenen Schluessel). */
-function mo_sicherung_spaet($neu, $jetzt)
-{
-    $liste = array();
-    /* Welle Mehrfach-Ziele (Sprachmodul 1.2.1, Spaetliste): fehlt die Liste der weiteren Ziele in der Sicherung (Datei einer
-     * aelteren Fassung), gelten die jetzigen weiteren Ziele weiter - genannt im Hinweis. Eine Sicherung MIT leerer Liste
-     * heisst "keine weiteren Ziele" und wird so uebernommen. */
-    $mw_spaete = array();
-    if (isset($neu['tts']) && is_array($neu['tts']) && function_exists('ansage_sicherung_spaet')) {
-        list($neu['tts'], $mw_spaete) = ansage_sicherung_spaet($neu['tts'],
-            (isset($jetzt['tts']) && is_array($jetzt['tts'])) ? $jetzt['tts'] : null);
-    }
-    foreach ($mw_spaete as $mw_sn) { $liste[] = $mw_sn; }     // Welle Mehrfach-Ziele: tts.ziele (Spaetliste)
-    /* 1.1.33: die Herkunft der Sprechtoken kommt nie aus einer Datei; die geltende bleibt - ein uebernommenes Token
-     * bleibt uebernommen. Bis 1.1.32 fiel sie beim Zurueckspielen weg. */
-    list($mw_h, $mw_hl) = mo_wert_pruefen('ansage_token_herkunft',
-        (is_array($jetzt) && isset($jetzt['ansage_token_herkunft'])) ? $jetzt['ansage_token_herkunft'] : array());
-    $neu['ansage_token_herkunft'] = $mw_hl ? array() : $mw_h;
-    return array($neu, $liste);
-}
+/* 1.1.35: mo_sicherung_spaet() entfaellt. Was sie tat, tut das gemeinsame Sicherungsmodul: die Liste der weiteren
+ * Ziele (tts.ziele) behaelt ihren geltenden Wert, wenn sie in der Sicherung fehlt ('fehlt' => 'behalten' in
+ * mo_sicherung_beschreibung()), und der Vermerk ansage_token_herkunft kommt nie aus einer Datei ('nie_aus_datei'). */
 
 /** Optionen fuer Formular-Baustein und Formular-Lesen: die Ausgabearten und die POST-Namen der
  *  Loeschhaken, wie sie bis 1.1.17 hiessen (tts_alexa_loeschen, tts_google_loeschen). */
@@ -3939,45 +3926,38 @@ function mo_config_speichern($cfg)
 /**
  * Die Sicherungsdatei erzeugen - Inhalt und Kopf an EINER Stelle.
  *
- * A4: Der lesbare Kopf sagt, woher die Datei stammt und wann sie entstand.
- * Wer ihn hinzufuegt, ergaenzt im selben Zug die Leseseite - sonst lehnt
- * mo_sicherung_lesen() die Datei ab, die zwei Zeilen vorher dieselbe
- * Bibliothek erzeugt hat. Genau das ist am 26.08.2026 an einer anderen Linie
- * passiert; gefunden hat es kein Lesen, sondern der Prueflauf, der die eigene
- * Sicherung zurueckspielt.
+ * 1.1.35: Kopf (_hinweis, _plugin = 'robonect', _fassung, _stand, bei Bedarf
+ * _warnung) und Inhalt baut das gemeinsame Sicherungsmodul
+ * (Werkzeuge/gemeinsam/sicherung.php im Arbeitsordner, Abschrift
+ * webfrontend/html/sicherung.php; mo_sicherung_daten() -> sicherung_bauen()).
+ * In der Datei stehen alle Schluessel der Vorgaben aus der geltenden
+ * Konfiguration, ein fremder Schluessel aus einer Handbearbeitung nicht. Der
+ * Vermerk ansage_token_herkunft und die Sprechtoken gehen nie mit
+ * ('nie_aus_datei', ansage_sicherung_bereinigen()). Bis 1.1.34 stand hier ein
+ * eigener Kopf ohne _fassung, und die Datei trug jeden Schluessel der
+ * Konfiguration.
  *
  * DER AKTIONSTOKEN GEHOERT IN DIE DATEI - der Formulartoken NICHT. Ohne den
  * Aktionstoken stuenden nach dem Zurueckspielen alle Felder richtig, und das
  * Plugin kaeme trotzdem nicht an die Anlage; die Datei waere wertlos. Der
  * Formulartoken aus mo_formtoken() ist etwas anderes: er lebt eine Sitzung
  * und schuetzt gegen fremde Absender. In einer Datei hat er nichts zu suchen.
+ *
+ * C7 (X-3) wie bisher: wuerde das eigene Zurueckspielen die Datei abweisen,
+ * nennt _warnung die Namen (Satz K_WARNUNG des Moduls), nie Werte; geliefert
+ * wird sie trotzdem. Rueckgabe: der Text der Datei oder false.
  */
-function mo_sicherung_erzeugen($mit_warnung = true)
+function mo_sicherung_erzeugen()
 {
-    $cfg = mo_config();
-    /* Ansage-2 (Durchgang 01.10.2026): das Sprechtoken von Alexa-NG reist
-     * nicht mit - beim Zurueckspielen bleibt das geltende stehen. */
-    unset($cfg['ansage_token_herkunft']);     // 1.1.27
-    if (isset($cfg['tts']) && is_array($cfg['tts'])) { $cfg['tts'] = ansage_sicherung_bereinigen($cfg['tts']); }   // Nr. 36 b: eine Quelle
-    $kopf = array(
-        '_hinweis' => 'Einstellungen des LoxBerry-Plugins Rasenmaeher (Robonect). '
-                    . 'Enthaelt Zugangsdaten des Maehers und das Aktionstoken - '
-                    . 'wie ein Passwort behandeln. Die Sprechtoken fuer Alexa-NG '
-                    . 'und fuer Chromecast 4 Lox NG (Google-Lautsprecher) sind nicht enthalten.',
-        '_stand'   => date('Y-m-d H:i:s'),
-        '_plugin'  => 'robonect',
-    );
-    /* C7 (X-3): die Datei wird trotzdem vollstaendig geliefert; ihr Kopf sagt,
-     * welche Schluessel das Zurueckspielen abweisen wuerde - nur Namen. */
-    if ($mit_warnung) {
-        $mo_namen = mo_sicherung_mangel();
-        if ($mo_namen) {
-            $kopf['_warnung'] = 'Beim Zurueckspielen wuerden abgewiesen: ' . implode(', ', $mo_namen)
-                              . ' - vorher in der Oberflaeche berichtigen.';
-        }
-    }
-    return json_encode($kopf + $cfg,
-        JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    $js = sicherung_json(mo_sicherung_daten());
+    return $js !== '' ? $js : false;
+}
+
+/** 1.1.35: Die Sicherung als Feld (Kopf und Inhalt), gebaut vom gemeinsamen Sicherungsmodul. */
+function mo_sicherung_daten($cfg = null)
+{
+    if (!is_array($cfg)) { $cfg = mo_config(); }
+    return sicherung_bauen(mo_sicherung_beschreibung(), $cfg);
 }
 
 /** Dateiname der Sicherung - steht genau einmal. */
@@ -4240,7 +4220,7 @@ function mo_wert_pruefen($k, $v)
         case 'befehle_mqtt_ein':
         case 'befehle_mqtt_steuern':
         case 'stat_ein':     return mo_zahl_pruefen($k, $v, 0, 1);
-        case 'ansage_regeln':     // 1.1.33: gegen den Stamm, wie mo_sicherung_lesen()
+        case 'ansage_regeln':     // 1.1.33: gegen den Stamm, wie das Zurueckspielen
             $g = '';
             $r = ansage_regeln_wert($v, $g);
             return $r !== null ? array($r, array())
@@ -4309,98 +4289,171 @@ function mo_fmt_feld()
 }
 
 /**
- * Eine Sicherungsdatei einlesen - und dabei NICHTS durchgehen lassen.
+ * 1.1.35: Die Beschreibung dieser Linie fuer das gemeinsame Sicherungsmodul
+ * (Werkzeuge/gemeinsam/sicherung.php, Auftrag des Hausherrn 12.11.2026).
+ * Lesen, Pruefen und Zurueckspielen macht das Modul. Bis 1.1.34 stand hier
+ * eine eigene Schleife (mo_sicherung_lesen()): ein unbekannter Schluessel oben
+ * und in den Bloecken notify, tts und ansage_regeln wies die ganze Datei ab,
+ * ein unbekannter Schluessel in einem Maehereintrag fiel still weg, ein leerer
+ * Wert wurde beanstandet, und eine Datei mit fremdem oder ohne Kennzeichen
+ * wurde gelesen wie eine eigene (gemessen 15.11.2026 an 1.1.34 mit
+ * Werkzeuge/sicherung_pruefstand.py --profil ist).
  *
- * Der wichtigste Punkt: eine halb gueltige Datei ueberschreibt GAR NICHTS.
- * Wer eine Sicherung zurueckspielt, will entweder den ganzen Stand oder
- * gar keinen - eine zur Haelfte uebernommene Konfiguration ist schlimmer
- * als die alte, und man sieht es ihr nicht an.
+ * Seither: das Kennzeichen 'robonect' (im Kopf jeder Sicherung seit
+ * mindestens 1.1.2, bis 1.1.34 geschrieben, aber nicht gelesen) muss stimmen;
+ * eine Datei mit fremdem oder ohne Kennzeichen wird als Ganzes abgewiesen.
+ * Unbekannte Schluessel oben, in den Bloecken und in den Maehereintraegen
+ * werden verworfen und mit Namen gemeldet, die uebrigen Werte zurueckgespielt.
+ * Ein leerer Wert ueberschreibt keinen bestehenden; der bisherige bleibt und
+ * wird genannt.
  *
- * Unbekannte Schluessel sind eine Beanstandung, kein stiller Verlust: sie
- * stammen aus einer anderen Fassung oder einem anderen Plugin.
+ * Wie bisher: jeder Wert geht durch mo_wert_pruefen() (dieselbe Positivliste
+ * wie das Formular, Beanstandung mit Beschriftung und Schluessel) und wird in
+ * deren Sollform uebernommen; eine Datei mit Sprechtoken wird abgewiesen; eine
+ * halb gueltige Datei aendert nichts, alle Beanstandungen werden gesammelt;
+ * der Vermerk ansage_token_herkunft kommt nie aus einer Datei und behaelt
+ * seinen geltenden Wert (Modul 1.2.1; bis 1.1.34 mo_sicherung_spaet()).
  *
- * Rueckgabe: array(Konfiguration|null, Beanstandungen[], uebernommene Werte).
+ * Was fehlen darf (Regeln/05, Entscheidung des Hausherrn 12.11.2026 "Ja,
+ * behalten"): die Schluessel aus mo_spaet_schluessel() und die Liste der
+ * weiteren Ziele im Block tts behalten ihren geltenden Wert und werden
+ * genannt. Bis 1.1.34 gingen befehle_mqtt_ein, befehle_mqtt_steuern und
+ * ansage_regeln dabei auf ihre Vorgabe.
  */
-function mo_sicherung_lesen($roh)
+function mo_sicherung_beschreibung()
 {
-    /* U4: in einer Datei werden Beschriftung UND Schluessel genannt. */
-    $mo_form_vorher = mo_nennform();
+    $p = mo_paths();
+    $tts_s = array_merge(array_keys(ansage_vorgaben()), ansage_geheim());
+    $tts_knoten = array();
+    if (mo_mit_zielen()) {
+        $tts_s[] = 'ziele';
+        $tts_knoten['ziele'] = sicherung_liste(array('art', 'wo', 'laut', 'sprache', 'ein')) + array('fehlt' => 'behalten');
+    }
+    $schluessel = array(
+        'mowers' => sicherung_liste(array('name', 'ip', 'user', 'pass', 'blade_hours', 'blade_base')),
+        'notify' => sicherung_block(array('audio', 'push', 'fehler', 'fertig', 'messer', 'akku')),
+        'tts' => sicherung_block($tts_s, $tts_knoten) + array(
+            'sichern' => 'ansage_sicherung_bereinigen',
+            'pruefen' => function ($w, $k = '', $neu = null, $roh = null) {
+                /* Nr. 36 b (Stufe 2): eine Sicherung dieses Plugins traegt nie ein Sprechtoken - traegt die Datei
+                 * eines, wird sie abgewiesen. Gemessen am Block der DATEI, denn Regel 3 des Moduls setzt ein leeres
+                 * Feld vorher auf den geltenden Wert. */
+                $aus = array();
+                foreach (ansage_sicherung_mangel($roh) as $n) {
+                    $aus[] = mo_t($n === 'tts.google_token' ? 'TEXT.SICH_GOOGLE_TOKEN_DATEI' : 'TEXT.SICH_ALEXA_TOKEN_DATEI');
+                }
+                if ($aus) { return $aus; }
+                list(, $l) = mo_sicherung_wert('tts', is_array($w) ? ansage_sicherung_bereinigen($w) : $w);
+                return $l;
+            },
+            'wandeln' => function ($w) {
+                list($v) = mo_sicherung_wert('tts', ansage_sicherung_bereinigen($w));
+                return $v;
+            }),
+        'ansage_regeln' => sicherung_block(array_keys(ansage_regeln_vorgaben())),
+    );
+    /* Jeder Wert wird in der Sollform von mo_wert_pruefen() uebernommen (Zahl als Zahl, Thema ohne Leerraum am
+     * Rand, Maeherliste ohne leere Zeilen) - wie bis 1.1.34. */
+    foreach (array_keys(mo_vorgaben()) as $k) {
+        if ($k === 'ansage_token_herkunft') { continue; }
+        if (!isset($schluessel[$k])) { $schluessel[$k] = array(); }
+        if (!isset($schluessel[$k]['wandeln'])) {
+            $schluessel[$k]['wandeln'] = function ($w) use ($k) {
+                list($v) = mo_sicherung_wert($k, $w);
+                return $v;
+            };
+        }
+    }
+    foreach (mo_spaet_schluessel() as $s) { $schluessel[$s]['fehlt'] = 'behalten'; }
+    return array(
+        'kennzeichen' => 'robonect',
+        /* Der Kopftext wie bis 1.1.34. */
+        'hinweis' => 'Einstellungen des LoxBerry-Plugins Rasenmaeher (Robonect). '
+                   . 'Enthaelt Zugangsdaten des Maehers und das Aktionstoken - '
+                   . 'wie ein Passwort behandeln. Die Sprechtoken fuer Alexa-NG '
+                   . 'und fuer Chromecast 4 Lox NG (Google-Lautsprecher) sind nicht enthalten.',
+        /* Die Fassung im Kopf kommt aus der Plugin-Datenbank bzw. plugin.cfg - keine fuenfte Stelle neben den
+         * vier, die Werkzeuge/fassung_setzen.py pflegt. */
+        'home' => (string) $p['lbhome'], 'ordner' => (string) $p['plugin'],
+        'plugin_cfg' => dirname(dirname(__DIR__)) . '/plugin.cfg',
+        'vorgaben' => mo_vorgaben(),
+        'schluessel' => $schluessel,
+        'nie_aus_datei' => array('ansage_token_herkunft'),
+        'pruefen' => function ($k, $w) {
+            list(, $l) = mo_sicherung_wert($k, $w);
+            return $l;
+        },
+        'vorbereiten' => 'mo_sicherung_vorbereiten',
+        'jetzt' => function () { return mo_config(); },
+        't' => 'mo_t',
+        'e' => 'mw_e',
+    );
+}
+
+/**
+ * 1.1.35: Einen Wert einer Sicherungsdatei pruefen - gegen dieselbe
+ * Positivliste wie das Formular (mo_wert_pruefen()). In einer Datei werden
+ * Beschriftung UND Schluessel genannt (U4, mo_nennform('datei')).
+ * Rueckgabe: array(Wert in Sollform | null, Liste der Beanstandungstexte).
+ * Die Texte sind fertig maskiert (mo_nennen_e()).
+ */
+function mo_sicherung_wert($k, $w)
+{
+    $vorher = mo_nennform();
     mo_nennform('datei');
-    $mangel = array();
-    $namen = array();
-    $daten = json_decode((string) $roh, true);
-    if (!is_array($daten)) {
-        mo_nennform($mo_form_vorher);
-        return array(null, array(mo_t('TEXT.SICH_KEIN_JSON')), 0, array('(kein JSON)'));
+    list($v, $l) = mo_wert_pruefen($k, $w);
+    mo_nennform($vorher);
+    $texte = array();
+    foreach ($l as $e) { $texte[] = $e['text']; }
+    return array($v, $texte);
+}
+
+/**
+ * 1.1.35: Vor dem Speichern (Rueckruf 'vorbereiten' des Moduls): die geltenden
+ * Sprechtoken bleiben im Block tts (ansage_sicherung_tokens_behalten(); die
+ * Sicherung traegt keine) - wie bis 1.1.34 im Handler.
+ */
+function mo_sicherung_vorbereiten($neu, $jetzt, $r)
+{
+    if (isset($neu['tts']) && is_array($neu['tts'])) {
+        $neu['tts'] = ansage_sicherung_tokens_behalten($neu['tts'],
+            (is_array($jetzt) && isset($jetzt['tts'])) ? $jetzt['tts'] : null);
     }
-    $neu = mo_vorgaben();
-    $bekannt = array_keys($neu);
-    $anzahl = 0;
-    foreach ($daten as $k => $w) {
-        $ks = (string) $k;
-        /* Der lesbare Kopf (_hinweis, _stand, _plugin, _warnung) wird
-         * UEBERGANGEN, nicht beanstandet - er ist keine Einstellung. */
-        if ($ks !== '' && $ks[0] === '_') { continue; }
-        if ($k === 'ansage_token_herkunft') { continue; }     // S2: nie aus einer Datei
-        if ($k === 'ansage_regeln') {     // S2: ungueltig = abgewiesen, gueltig = uebernommen
-            $s2_g = '';
-            $s2_r = ansage_regeln_wert($w, $s2_g);
-            if ($s2_r === null) {     // 1.1.31: bis 1.1.30 stillschweigend uebergangen, die Datei galt als heil
-                $mangel[] = sprintf(mo_t('TEXT.SICH_WERT'), mo_nennen_e('config.ansage_regeln'));
-                $namen[] = 'config.ansage_regeln';
-                continue;
-            }
-            $neu['ansage_regeln'] = $s2_r;
-            
-            continue;
-        }
-        if (!in_array($ks, $bekannt, true)) {
-            $mangel[] = sprintf(mo_t('TEXT.SICH_FREMD'),
-                                 htmlspecialchars($ks, ENT_QUOTES, 'UTF-8'));
-            $namen[] = $ks;
-            continue;
-        }
-        /* A5: JEDER WERT wird geprueft, nicht nur der Schluessel - gegen
-         * dieselbe Positivliste, die auch das Formular benutzt. U5: alle
-         * Maengel eines Schluessels werden genannt. */
-        list($wert, $l) = mo_wert_pruefen($ks, $w);
-        if ($l) {
-            foreach ($l as $e) {
-                $mangel[] = $e['text'];
-                $namen[] = $e['name'];
-            }
-            continue;
-        }
-        $neu[$ks] = $wert;
-        $anzahl++;
-    }
-    if ($anzahl === 0 && !$mangel) {
-        $mangel[] = mo_t('TEXT.SICH_LEER');
-    }
-    /* FEHLENDE Schluessel sind eine Beanstandung, kein stiller Rueckfall.
-     *
-     * Eine Datei mit einem einzigen Schluessel lief bis 1.1.0 ohne
-     * Beanstandung durch, und alle uebrigen Einstellungen fielen auf Werk
-     * zurueck - quittiert mit "1 Wert uebernommen" (gemessen an VolkswagenID
-     * 0.9.11 am 03.09.2026; am 07.09.2026 ueber den Bestand ausgerollt).
-     * Verglichen wird gegen die VORGABEN. */
-    $fehlend = array();
-    foreach (array_keys(mo_vorgaben()) as $fk) {
-        /* Gruppe 2 / MQTT (1.1.24): die Haken der Befehlsbruecke kennt eine Sicherung bis 1.1.23 nicht - dann gilt
-         * ihre Vorgabe (aus); sonst waere jede aeltere Sicherung abgewiesen. */
-        if (in_array($fk, mo_spaet_schluessel(), true)) { continue; }
-        if ($fk === 'ansage_token_herkunft') { continue; }     // 1.1.33: steht nie in einer Sicherung (mo_sicherung_spaet())
-        if (!array_key_exists($fk, $daten)) {
-            $fehlend[] = $fk;
-        }
-    }
-    if ($fehlend) {
-        $mangel[] = sprintf(mo_t('TEXT.SICH_FEHLEND'), count($fehlend),
-            htmlspecialchars(implode(', ', $fehlend), ENT_QUOTES, 'UTF-8'));
-        $namen = array_merge($namen, $fehlend);
-    }
-    mo_nennform($mo_form_vorher);
-    return array($mangel ? null : $neu, $mangel, $anzahl, $namen);
+    return $neu;
+}
+
+/**
+ * 1.1.35: Nach dem Zurueckspielen nachziehen und sagen, was geschah
+ * (Regeln/05, Punkt 6). Rueckgabe array('ok' => ..., 'warn' => ...,
+ * 'fehler' => ...), fertig maskiert.
+ *
+ *  - Das Aktionstoken: traegt die Datei keines, bleibt das geltende (Regel 3
+ *    des Moduls); die Seite sagt dazu, dass die Adressen in Loxone weiter
+ *    gelten (wie bis 1.1.34).
+ *  - MQTT: Praefix oder Schalter koennen sich geaendert haben - dasselbe
+ *    Raeumen, Vormerken und Nachfuehren der Abodatei wie bis 1.1.34
+ *    (mo_mqtt_nach_aenderung()).
+ *  - Die Befehlsbruecke folgt den Haken unter MQTT wie nach dem Speichern des
+ *    Reiters MQTT (mo_bruecke_schalten()); bis 1.1.34 geschah das erst im
+ *    Minutenlauf.
+ *  - Der Abruf der Maeher (cron.php im Minutentakt) liest die Einstellungen
+ *    bei jedem Lauf neu; einen Dienst, der dafuer neu zu starten waere, gibt
+ *    es nicht.
+ */
+function mo_sicherung_nachziehen($jetzt, $neu_cfg, $r)
+{
+    $aus = array('ok' => array(), 'warn' => array(), 'fehler' => array());
+    if (in_array('aktionstoken', $r['leer_behalten'], true)) { $aus['ok'][] = mo_t('TEXT.SICH_TOKEN_BLIEB'); }
+    $m = mo_mqtt_nach_aenderung(is_array($jetzt) ? $jetzt : array(), is_array($neu_cfg) ? $neu_cfg : array());
+    foreach ($m['ok'] as $x) { $aus['ok'][] = $x; }
+    foreach ($m['fehler'] as $x) { $aus['fehler'][] = $x; }
+    list($bs, $bt) = mo_bruecke_schalten();
+    if ($bs === 'ein') { $aus['ok'][] = mo_t('BEFEHL.M_EIN'); }
+    elseif ($bs === 'aus') { $aus['ok'][] = mo_t('BEFEHL.M_AUS'); }
+    elseif ($bs === 'start_fehl') { $aus['warn'][] = sprintf(mo_t('BEFEHL.M_START_FEHL'), mw_e(mo_kuerzen($bt, 200))); }
+    elseif ($bs === 'stop_fehl') { $aus['fehler'][] = sprintf(mo_t('BEFEHL.M_STOP_FEHL'), mw_e(mo_kuerzen($bt, 200))); }
+    $aus['ok'][] = mo_t('TEXT.SICH_DIENST_TAKT');
+    return $aus;
 }
 
 /**
@@ -4409,16 +4462,17 @@ function mo_sicherung_lesen($roh)
  * solche Datei ohne jeden Hinweis (Altschluessel udp_port, von Hand gesetztes
  * cache_sec=3) - der Anwender merkte es erst auf dem neuen Geraet.
  *
- * Dieselbe Pruefung wie das Zurueckspielen (mo_sicherung_lesen()) auf das
- * eigene Erzeugnis. Rueckgabe: die NAMEN der beanstandeten Schluessel - nie
- * ein Wert (in der Datei steht das Kennwort).
+ * Seit 1.1.35 dieselbe Pruefung wie beim Zurueckspielen ueber das gemeinsame
+ * Sicherungsmodul (sicherung_selbstpruefung()) an genau der Datei, die
+ * "Einstellungen sichern" liefert. Rueckgabe: die NAMEN der beanstandeten
+ * Schluessel - nie ein Wert (in der Datei steht das Kennwort).
  */
 function mo_sicherung_mangel()
 {
-    $daten = json_decode((string) mo_sicherung_erzeugen(false), true);
-    if (!is_array($daten)) { return array('(kein JSON)'); }
-    list(, , , $namen) = mo_sicherung_lesen(json_encode($daten));
-    return array_values(array_unique($namen));
+    $cfg = mo_config();
+    $daten = mo_sicherung_daten($cfg);
+    unset($daten['_warnung']);
+    return sicherung_selbstpruefung(mo_sicherung_beschreibung(), $daten, $cfg);
 }
 
 /* ==================================================================

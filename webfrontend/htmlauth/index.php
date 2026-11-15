@@ -292,7 +292,8 @@ if ($mw_ist_post && isset($_POST['vorlage_bb'])) {
  * Zurueckspielen alle Felder richtig, und das Plugin kaeme trotzdem nicht an
  * die Anlage; die Datei waere wertlos. C7 (X-3): wuerde das Zurueckspielen
  * die Datei abweisen, traegt ihr Kopf _warnung (nur Namen), und der Knopf
- * zeigt die Warnung schon vorher. */
+ * zeigt die Warnung schon vorher. 1.1.35: Kopf und Inhalt baut das gemeinsame
+ * Sicherungsmodul (mo_sicherung_erzeugen() -> sicherung_bauen()). */
 if ($mw_ist_post && isset($_POST['mo_sichern'])) {
     $mw_js = mo_sicherung_erzeugen();
     if ($mw_js !== false) {
@@ -308,60 +309,42 @@ if ($mw_ist_post && isset($_POST['mo_sichern'])) {
 
 /* --- Einstellungen zurueckspielen ---
  *
- * is_uploaded_file() ZUERST: ohne diese Pruefung liesse sich jede Datei des
- * Servers unterschieben. Dann die Groessengrenze - eine Sicherung dieses
- * Plugins ist wenige Kilobyte gross; alles darueber wird gar nicht erst
- * gelesen. Und dann die Alles-oder-nichts-Pruefung: eine halb gueltige Datei
- * ueberschreibt GAR NICHTS, und ALLE Beanstandungen werden gemeinsam
- * gemeldet, nicht die erste. */
+ * 1.1.35: den Eingang prueft das gemeinsame Sicherungsmodul (sicherung_eingang(),
+ * Modul 1.1.0, Entscheidung des Hausherrn 12.11.2026) - in jeder Linie gleich:
+ * zuerst der Haken zurueck_ok (ohne ihn wird nichts gelesen und nichts
+ * geaendert), dann is_uploaded_file() (sonst liesse sich jede Datei des Servers
+ * unterschieben) und die Groessengrenze des Moduls (256 KB, wie bis 1.1.34
+ * hier). Erst danach wird die Datei gelesen.
+ *
+ * Das Modul (sicherung_zurueckspielen(), Beschreibung mo_sicherung_beschreibung())
+ * liest, prueft, verwirft Unbekanntes mit Namen, laesst leere Werte den
+ * bisherigen stehen und aendert bei einer Beanstandung GAR NICHTS (alle
+ * Beanstandungen, nicht nur die erste). mo_config_speichern() schreibt
+ * Konfiguration und Zweitschrift; das Modul misst danach, ob die Zweitschrift
+ * inhaltsgleich ist. mo_sicherung_nachziehen() sagt, was mit Token, MQTT,
+ * Befehlsbruecke und Abruf geschah. */
 if ($mw_ist_post && isset($_POST['mo_zurueck'])) {
-    if (!isset($_FILES['mo_sicherung']) || !is_array($_FILES['mo_sicherung'])
-        || !isset($_FILES['mo_sicherung']['tmp_name']) || !is_string($_FILES['mo_sicherung']['tmp_name'])
-        || !@is_uploaded_file($_FILES['mo_sicherung']['tmp_name'])) {
-        $mw_fehler[] = mo_t('TEXT.SICH_KEINE_DATEI');
-    } elseif ((int) $_FILES['mo_sicherung']['size'] > 262144) {
-        $mw_fehler[] = mo_t('TEXT.SICH_ZU_GROSS');
+    list($mw_roh, $mw_ab) = sicherung_eingang(mo_sicherung_beschreibung(), $_POST, $_FILES, 'mo_sicherung');
+    if ($mw_ab !== null) {
+        $mw_m = sicherung_meldungen(mo_sicherung_beschreibung(), $mw_ab);
+        foreach ($mw_m['fehler'] as $mw_x) { $mw_fehler[] = $mw_x; }
     } else {
-        list($mw_neu, $mw_mangel, $mw_n) = mo_sicherung_lesen(
-            (string) @file_get_contents($_FILES['mo_sicherung']['tmp_name']));
-        if ($mw_neu === null) {
-            $mw_fehler[] = mo_t('TEXT.SICH_ABGELEHNT');
-            foreach ($mw_mangel as $mw_m) { $mw_fehler[] = $mw_m; }
-        } else {
-            /* Das Aktionstoken der Datei gilt - sonst waere die Sicherung
-             * wertlos. Ist in der Datei keines, bleibt das bisherige stehen:
-             * ein leeres Feld darf die Loxone-Adressen nicht abschneiden.
-             * C8 (Durchgang 01.10.2026, Nr. 19): die Meldung sagt es jetzt -
-             * bis 1.1.14 stand nur "10 Werte uebernommen". */
-            $mw_token_blieb = (trim((string) $mw_neu['aktionstoken']) === '');
-            if ($mw_token_blieb) {
-                $mw_neu['aktionstoken'] = (string) $mw_cfg['aktionstoken'];
-            }
-            /* C9 / Nr. 36 b, Stufe 2: die Sprechtoken reisen nie in einer Datei - die geltenden
-             * bleiben (ansage_sicherung_tokens_behalten(); nur eine Zeichenkette ist ein Token). */
-            if (is_array($mw_neu['tts'])) {
-                $mw_neu['tts'] = ansage_sicherung_tokens_behalten($mw_neu['tts'], $mw_cfg['tts']);
-            }
-            /* Welle Mehrfach-Ziele (1.1.25): fehlt die Liste der weiteren Ziele in der Sicherung (aeltere Fassung),
-             * gelten die jetzigen weiteren Ziele (mo_sicherung_spaet(), genannt in der Meldung). */
-            list($mw_neu, $mw_spaet) = mo_sicherung_spaet($mw_neu, $mw_cfg);
-            $mw_alt_cfg = $mw_cfg;
-            if (mo_config_speichern($mw_neu)) {
-                $mw_cfg = mo_config();
-                $mw_fmt = mo_formtoken();   // das Merkmal haengt am Token
-                $mw_ok[] = sprintf(mo_t('TEXT.SICH_UEBERNOMMEN'), $mw_n);
-                if ($mw_spaet) { $mw_ok[] = mw_e(sprintf(mo_t('TEXT.SICH_SPAET'), implode(', ', $mw_spaet))); }
-                if ($mw_token_blieb) { $mw_ok[] = mo_t('TEXT.SICH_TOKEN_BLIEB'); }
-                mo_log('Einstellungen aus einer Sicherung zurueckgespielt: ' . $mw_n . ' Werte'
-                    . ($mw_token_blieb ? ' (die Datei trug kein Aktionstoken - das bisherige bleibt).' : '.'));
-                // M2/M3: Praefix oder Schalter koennen sich geaendert haben.
-                $mw_r = mo_mqtt_nach_aenderung($mw_alt_cfg, $mw_cfg);
-                foreach ($mw_r['ok'] as $mw_m) { $mw_ok[] = $mw_m; }
-                foreach ($mw_r['fehler'] as $mw_m) { $mw_fehler[] = $mw_m; }
-            } else {
-                $mw_fehler[] = mo_t('TEXT.SICH_SCHREIBFEHLER');
-            }
-        }
+        $mw_b = mo_sicherung_beschreibung();
+        $mw_b['speichern'] = function ($neu) { return mo_config_speichern($neu); };
+        $mw_b['zweitschrift'] = function () { $p = mo_paths(); return array($p['config'], $p['backup']); };
+        $mw_b['nachziehen'] = function ($neu, $jetzt, $r) use (&$mw_cfg, &$mw_fmt, &$mw_warn, &$mw_fehler) {
+            $mw_cfg = mo_config();
+            $mw_fmt = mo_formtoken();   // das Merkmal haengt am Token
+            $n = mo_sicherung_nachziehen($jetzt, $mw_cfg, $r);
+            foreach ($n['warn'] as $x) { $mw_warn[] = $x; }
+            foreach ($n['fehler'] as $x) { $mw_fehler[] = $x; }
+            return $n['ok'];
+        };
+        $mw_b['log'] = 'mo_log';
+        $mw_r = sicherung_zurueckspielen($mw_b, $mw_roh);
+        $mw_m = sicherung_meldungen($mw_b, $mw_r);
+        foreach ($mw_m['fehler'] as $mw_x) { $mw_fehler[] = $mw_x; }
+        foreach ($mw_m['hinweise'] as $mw_x) { $mw_ok[] = $mw_x; }
     }
     $mw_tab = 'tab-settings';
 }
@@ -1070,6 +1053,7 @@ echo ansage_regeln_html(mo_ansage_regeln(), array(), array(), array(
     <?php echo mo_fmt_feld(); ?>
     <input data-role="none" type="hidden" name="activetab" value="tab-settings">
     <input data-role="none" type="file" name="mo_sicherung" accept=".json">
+    <?php echo sicherung_haken_zeile(mo_sicherung_beschreibung()); ?>
     <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="mo_zurueck" value="1"><?php echo mw_e(mo_t('TEXT.K_ZURUECK')); ?></button>
   </form>
 </div>
