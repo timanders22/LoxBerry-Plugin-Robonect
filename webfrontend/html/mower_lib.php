@@ -224,7 +224,7 @@ function mo_upgrade_marke_gilt()
     $roh = trim((string) @file_get_contents($p['marke']));
     if (preg_match('/^[0-9]{1,12}$/', $roh) !== 1) { return false; }
     $alter = time() - (int) $roh;
-    return $alter >= -300 && $alter < 3600;
+    return $alter >= 0 && $alter < 3600;   // Frage 74 (18.11.2026): aus der Zukunft gilt nicht
 }
 
 function mo_vorgaben()
