@@ -18,6 +18,10 @@ Die Bausteine der beiden Baustein-Listen aus dem Reiter *Einbindung in Loxone* s
 auf den Seiten „Robonect“ und „Robonect Steuerung“ im [LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt),
 einer gemeinsamen Projektdatei mit allen Plugin-Seiten und Vorlagen.
 
+## Neu in 1.1.39
+
+- Die Kopfzeile zeigt jetzt die installierte Fassung, einheitlich in allen Plugins.
+
 ## Neu in 1.1.38
 
 - **Geändert – Takt ruht während des Updates schon in der Schale:** Der Minutentakt endet bei laufender Aktualisierung jetzt, bevor PHP startet. Bis 1.1.37 hielt erst `cron.php` an und schrieb dazu eine Zeile in `mower.log`; Daten gingen nicht verloren. Ist die Marke eine Stunde oder älter, liegt sie in der Zukunft oder enthält sie keine Unixzeit, gilt sie nicht, damit eine abgebrochene Aktualisierung den Takt nicht dauerhaft stilllegt. Alle Plugins dieser Reihe fragen die Marke mit demselben Block ab. Es wirkt schon beim Update auf diese Fassung, denn der Installer legt die Takte der neuen Fassung vor der Lücke an, und das `preupgrade.sh` der neuen Fassung legt die Marke an. Gemessen in einer Nachstellung des Update-Ablaufs auf dem Arbeitsrechner (WSL); am Gerät nicht gemessen.

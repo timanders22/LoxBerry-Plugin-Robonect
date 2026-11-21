@@ -688,7 +688,8 @@ $mw_themen = mo_themen();
 /* ================= 6. Seitenkopf ================= */
 
 $mw_frame = class_exists('LBWeb', false);
-if ($mw_frame) { LBWeb::lbheader('Rasenm&auml;her (Robonect)', 'https://wiki.loxberry.de/', 'help.html'); }
+require_once __DIR__ . '/fassung.php';   // Fassung im Titel: gemeinsames Stueck fassung.php (21.11.2026)
+if ($mw_frame) { LBWeb::lbheader(plugin_kopftitel('Rasenm&auml;her (Robonect)', __DIR__), 'https://wiki.loxberry.de/', 'help.html'); }
 $mw_host = mw_e(isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : '<loxberry-ip>');
 
 /* ================= 7. HTML ================= */
