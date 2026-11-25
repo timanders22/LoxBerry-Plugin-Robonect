@@ -24,11 +24,13 @@ date_default_timezone_set('Europe/Berlin');
  * Welle Mehrfach-Ziele). Liegt neben dieser Datei; sie legt
  * beim Einbinden nur Funktionen an und schuetzt sich selbst gegen doppeltes Laden. */
 require_once __DIR__ . '/sprachausgabe.php';
+require_once __DIR__ . '/meldung.php';     // Statusmeldungen an SignalBot (seit 1.1.41)
 
 /* 1.1.35: Gemeinsames Sicherungsmodul (Abschrift von Werkzeuge/gemeinsam/sicherung.php, Modul 1.2.3) fuer
  * "Einstellungen sichern" und "Einstellungen zurueckspielen" - mo_sicherung_beschreibung(). Liegt neben dieser
  * Datei, legt beim Einbinden nur Funktionen an und schuetzt sich selbst gegen doppeltes Laden. */
 require_once __DIR__ . '/sicherung.php';
+require_once __DIR__ . '/haus_bereiche.php';     // gemeinsame Bereiche unter haus/ (seit 1.1.41, Regeln/07)
 
 
 /* Den LoxBerry-Wurzelordner ohne festen Systempfad bestimmen.
@@ -253,6 +255,7 @@ function mo_vorgaben()
     'befehle_mqtt_steuern' => 0,  // zweiter Haken: Fahrbefehle (starten, anhalten, Betriebsarten)
     'notify' => array(),
     'tts' => array(),
+    'meldung' => meld_vorgaben(mo_meld_anlaesse(), mo_meld_haken_vorgabe()),     // 1.1.41: Meldungen an SignalBot, ab Werk aus
     'aktionstoken' => '',          // schuetzt ?cmd= (unangemeldeter Endpunkt)
     'stat_ein' => 0,              // Einsatzstatistik fuehren (ab Werk AUS)
     /* 1.1.33: die beiden Schluessel des Sprachmoduls (Regeln "Wann gesprochen wird", Herkunft uebernommener Sprechtoken).
@@ -2067,6 +2070,7 @@ function mo_mqtt_publish($st = null, $dev = 1, $art = 'voll') {
     $udp = mo_mqtt_udpport();
     if (!$udp) { return false; }
     $wurzel = mo_mqtt_praefix($cfg['mqtt_topic']);
+    mo_praefix_haus_melden($cfg);   // 1.1.41: Praefix im gemeinsamen Bereich? melden, nicht anhalten
     $prefix = $wurzel;
     if ((int) $dev > 1) { $prefix .= '/' . (int) $dev; }
     $m = mo_mqtt_satz($st, $dev);
@@ -3205,6 +3209,8 @@ function mo_ansage_senden($jetzt = null)
         $conf = mo_config();
         mo_ansage_token_pflegen($conf);
         $conf = mo_config();
+        mo_meld_senden($frisch, $conf);     // 1.1.41: dieselben Anlaesse an SignalBot (eigene Haken)
+        $frisch = mo_meld_nur_ansage($frisch, $conf);     // die Ansage nur mit ihrem eigenen Haken
         $a = ansage_regel_sprechen($frisch, mo_tts($conf), mo_ansage_regeln($conf), mo_ansage_k());
         $erg = $a['regel'] !== '' ? $a['regel'] : 'gesprochen';
         if ($a['r'] !== null) {
@@ -3401,7 +3407,7 @@ function mo_events_check() {
              * der Ansagetext - ins Protokoll kommen nur die Anlaesse und seine Laenge. Der Satz
              * selbst steht weiter in anntext_<n> (Zwischenordner). */
             mo_log('Meldung: ' . implode(', ', array_keys($meldungen)) . ' (' . ansage_zeichen($meldung) . ' Zeichen)');
-            if (!empty($cfg['notify']['audio'])) {     /* 1.1.27: je Anlass ein Eintrag (Sperre, Nachtruhe aus dem Stamm), gesprochen in einem eigenen Vorgang */
+            if (!empty($cfg['notify']['audio']) || mo_meld_aktiv($cfg)) {     /* 1.1.27: je Anlass ein Eintrag (Sperre, Nachtruhe aus dem Stamm), gesprochen in einem eigenen Vorgang; 1.1.41: auch fuer die Meldung an SignalBot */
                 $mo_legen = array();
                 foreach ($meldungen as $mo_ma => $mo_mt) {
                     $mo_legen[] = array('schluessel' => $mo_ma . '|' . $n, 'text' => ($mo_legen ? '' : 'Hallo! ') . $mo_mt);
@@ -4128,6 +4134,13 @@ function mo_maeher_pruefen($m, $nr)
  */
 function mo_wert_pruefen($k, $v)
 {
+    if ($k === 'meldung') {     // 1.1.41: Block der Meldungen an SignalBot (gemeinsames Modul meldung.php)
+        $f = meld_block_pruefen($v, mo_meld_anlaesse());
+        if (!$f) { return array($v, array()); }
+        $m = array();
+        foreach ($f as $x) { $m[] = mo_mangel('', $k, htmlspecialchars(meld_beanstandung_text($x, mo_meld_k()), ENT_QUOTES, 'UTF-8')); }
+        return array(null, $m);
+    }
     switch ($k) {
         case 'mowers':
             if (!is_array($v)) { return array(null, array(mo_mangel('', $k, sprintf(mo_t('TEXT.SICH_WERT'), mo_nennen_e($k))))); }
@@ -4332,6 +4345,7 @@ function mo_sicherung_beschreibung()
     $schluessel = array(
         'mowers' => sicherung_liste(array('name', 'ip', 'user', 'pass', 'blade_hours', 'blade_base')),
         'notify' => sicherung_block(array('audio', 'push', 'fehler', 'fertig', 'messer', 'akku')),
+        'meldung' => meld_sicherung_knoten(mo_meld_anlaesse(), mo_meld_k()),     // 1.1.41
         'tts' => sicherung_block($tts_s, $tts_knoten) + array(
             'sichern' => 'ansage_sicherung_bereinigen',
             'pruefen' => function ($w, $k = '', $neu = null, $roh = null) {
@@ -4402,6 +4416,10 @@ function mo_sicherung_wert($k, $w)
     $vorher = mo_nennform();
     mo_nennform('datei');
     list($v, $l) = mo_wert_pruefen($k, $w);
+    /* 1.1.41: kein Praefix auf einem gemeinsamen Bereich unter haus/ (Regeln/07) - wie im Formular. */
+    if (!$l && $k === 'mqtt_topic' && is_string($v) && hb_bereich($v) !== '') {
+        $l = array(mo_mangel('mqtt_topic', $k, mw_e(sprintf(mo_t('HAUSBEREICH.SICH_W'), hb_bereich($v)))));
+    }
     mo_nennform($vorher);
     $texte = array();
     foreach ($l as $e) { $texte[] = $e['text']; }
@@ -4953,6 +4971,9 @@ function mo_selbsttest($datei, array $reiter, $test_offen = false)
      * niemand zu" - obwohl das Plugin nichts sendet. Aus ist eine
      * Entscheidung, kein Fehler: grauer Strich, und die Gateway-Zeile wird
      * ebenfalls grau. */
+    // 1.1.41: faellt das Themen-Praefix auf einen gemeinsamen Bereich unter haus/ (Regeln/07)?
+    $mo_hb = mo_pruef_praefix_haus($cfg);
+    $add('HAUSBEREICH.F_TEST', $mo_hb[0] === -1 ? 2 : $mo_hb[0], $mo_hb[1]);
     $mo_mqtt_an = !empty($cfg['mqtt_enabled']);
     $add('PRUEF.MQTT_EIN', $mo_mqtt_an ? 1 : 2,
          mo_t($mo_mqtt_an ? 'TEXT.PRUEF_MQTT_EIN_JA' : 'TEXT.PRUEF_MQTT_EIN_AUS'));
@@ -5391,3 +5412,158 @@ function mo_spaet_schluessel()
  * index.php: sonst steht er dem Endpunkt und jedem weiteren
  * Aufrufer nicht zur Verfuegung (Hausform, REGELN_2). */
 function mw_e($s) { return htmlspecialchars((string) $s, ENT_QUOTES, 'UTF-8'); }
+
+/**
+ * 1.1.41 (Entscheidung des Hausherrn 23.11.2026 "Nur gemeinsame Bereiche", Regeln/07): Zeile im Reiter Test -
+ * faellt das gespeicherte Themen-Praefix auf einen gemeinsamen Bereich unter haus/? Speichern und Zurueckspielen
+ * weisen ein solches Praefix ab; ein schon gespeichertes bleibt in Betrieb und ist hier rot, grau bei ausgeschaltetem MQTT.
+ * Liste und Pruefung aus dem gemeinsamen Modul haus_bereiche.php. Rueckgabe array(stand, html).
+ */
+function mo_pruef_praefix_haus($cfg)
+{
+    $p = mo_mqtt_praefix(isset($cfg['mqtt_topic']) ? $cfg['mqtt_topic'] : '');
+    $b = hb_bereich($p);
+    if ($b !== '') {
+        if (!(!empty($cfg['mqtt_enabled']))) {
+            return array(-1, sprintf(mo_t('HAUSBEREICH.A_AUS'), mw_e($p), mw_e($b)));
+        }
+        return array(0, sprintf(mo_t('HAUSBEREICH.A_NEIN'), mw_e($p), mw_e($b)));
+    }
+    return array(1, sprintf(mo_t('HAUSBEREICH.A_JA'), mw_e($p)));
+}
+
+/**
+ * 1.1.41: einmal je Aenderung eine Protokollzeile, solange das Praefix auf einen gemeinsamen Bereich faellt; der
+ * Versand bleibt, wie er ist. Gemerkt in praefix_haus_gemeldet.txt im Datenordner. Rueckgabe der Bereich oder ''.
+ */
+function mo_praefix_haus_melden($cfg, $merk = null)
+{
+    $p = mo_mqtt_praefix(isset($cfg['mqtt_topic']) ? $cfg['mqtt_topic'] : '');
+    if ($merk === null) {
+        $merk = mo_paths()['datadir'] . '/praefix_haus_gemeldet.txt';
+    }
+    $b = hb_melden_faellig($p, $merk);
+    if ($b !== '') {
+        mo_log(hb_logtext($p, $b));
+    }
+    return $b;
+}
+
+if (!function_exists('mo_meld_block')) {
+
+/* ---------------- Statusmeldungen an SignalBot (1.1.41, gemeinsames Modul meldung.php) ----------------
+ *
+ * Auftrag des Hausherrn 23.11.2026, Entscheidungen 23./24.11.2026: dieselben Anlaesse wie die Ansage, eigener Haken je
+ * Anlass, ab Werk aus; Sperre, Bremse und Versand im Modul. Die Erkennung laeuft auch ohne Ausgabeart, wenn eine Meldung
+ * eingeschaltet ist (mo_meld_aktiv()), und legt einen Anlass hin, wenn Ansage ODER Meldung ihn will
+ * (mo_meld_will()); der Sender trennt die Wege wieder (mo_meld_nur_ansage()).
+ */
+
+/** Die meldbaren Anlaesse: Name => Beschriftung (dieselben wie die Ansage). */
+function mo_meld_anlaesse()
+{
+    return array('fehler' => mo_t('TEXT.STRUNG_SCHLEIFENSIGNAL_VERLOREN'), 'fertig' => mo_t('TEXT.MHEN_BEENDET'), 'messer' => mo_t('TEXT.MESSERWECHSEL_FLLIG'), 'akku' => mo_t('TEXT.AKKU_UNTER_20_AUERHALB_DER_STATION'));
+}
+
+/** Die ab-Werk-Haken der Ansage dieser Linie: so stehen auch die Haken der Meldung, solange der Block nie gespeichert ist. */
+function mo_meld_haken_vorgabe()
+{
+    return array('fehler' => 1, 'fertig' => 1, 'messer' => 1, 'akku' => 0);
+}
+
+/** Ist der Haken dieses Anlasses fuer die ANSAGE gesetzt? */
+function mo_ansage_anlass_sprache($a, $cfg = null)
+{
+    if ($cfg === null) { $cfg = mo_config(); }
+    return in_array((string) $a, array('fehler', 'fertig', 'messer', 'akku'), true) && is_array($cfg)
+        && isset($cfg['notify']) && is_array($cfg['notify']) && !empty($cfg['notify']['audio']);
+}
+
+/** Der wirksame Block 'meldung' fuer den Betrieb (ungueltig gespeichert gilt als aus und wird im Formular genannt). */
+function mo_meld_block($cfg = null)
+{
+    if ($cfg === null) { $cfg = mo_config(); }
+    list($b) = meld_block(is_array($cfg) && array_key_exists('meldung', $cfg) ? $cfg['meldung'] : null, mo_meld_anlaesse(), mo_meld_haken_vorgabe());
+    return $b;
+}
+
+/** Die Beanstandungen eines gespeicherten Blocks (leer = gueltig). */
+function mo_meld_bean($cfg = null)
+{
+    if ($cfg === null) { $cfg = mo_config(); }
+    list(, $f) = meld_block(is_array($cfg) && array_key_exists('meldung', $cfg) ? $cfg['meldung'] : null, mo_meld_anlaesse(), mo_meld_haken_vorgabe());
+    return $f;
+}
+
+/** Ist irgendein Anlass zur Meldung eingeschaltet? Dann laeuft die Erkennung auch ohne Ausgabeart. */
+function mo_meld_aktiv($cfg = null)
+{
+    return meld_irgendein_an(mo_meld_block($cfg));
+}
+
+/** Will die Ansage ODER die Meldung diesen Anlass? */
+function mo_meld_will($a, $cfg = null)
+{
+    if ($cfg === null) { $cfg = mo_config(); }
+    return mo_ansage_anlass_sprache($a, $cfg) || meld_anlass_an(mo_meld_block($cfg), (string) $a);
+}
+
+/** Der Kontext des Moduls: Datenordner (data/plugins/<ordner>, daraus der Absender) und Texte - wie bei der Ansage. */
+function mo_meld_k()
+{
+    return (function () { $p = mo_paths(); $d = isset($p['datadir']) ? (string) $p['datadir'] : ''; return array('plugin' => basename($d), 'ordner' => ($d !== '' && @is_dir($d)) ? $d : mo_tmpdir()) + mo_ansage_k(); })();
+}
+
+/** Fuer die Ansage nur Eintraege, deren Ansage-Haken gesetzt ist; ein Eintrag ohne bekannten Anlass bleibt wie bisher. */
+function mo_meld_nur_ansage(array $l, $cfg = null)
+{
+    if ($cfg === null) { $cfg = mo_config(); }
+    $anl = mo_meld_anlaesse();
+    $aus = array();
+    foreach ($l as $e) {
+        if (is_array($e) && array_key_exists(meld_anlass_von($e), $anl) && !mo_ansage_anlass_sprache(meld_anlass_von($e), $cfg)) { continue; }
+        $aus[] = $e;
+    }
+    return $aus;
+}
+
+/** Die Eintraege an SignalBot melden. Protokoll: eine Zeile, wenn gesendet oder gescheitert (nie der Text). */
+function mo_meld_senden(array $l, $cfg = null)
+{
+    if ($cfg === null) { $cfg = mo_config(); }
+    $b = mo_meld_block($cfg);
+    if (empty($b['ein']) || !$l) { return null; }
+    $a = meld_regel_senden($l, $b, mo_meld_k());
+    if ($a['regel'] === '' || in_array($a['regel'], array('BREMSE', 'STAND', 'ORDNER'), true)) {
+        mo_log(meld_regel_kurz($a));
+    }
+    return $a;
+}
+
+/** Der Knopf "Testmeldung senden": array(angenommen, Satz). Geht an Haken, Sperre und Bremse vorbei. */
+function mo_meld_test()
+{
+    $r = meld_testmeldung(mo_meld_k());
+    mo_log('Testmeldung an SignalBot: ' . ($r[0] ? 'angenommen' : 'nicht angenommen'));
+    return $r;
+}
+
+/** Der Block im Einstellungsformular (unter den Ansage-Regeln, im selben Formular), mit Lage und Knopf. */
+function mo_meld_form_html($cfg = null)
+{
+    if ($cfg === null) { $cfg = mo_config(); }
+    $e = function ($s) { return htmlspecialchars((string) $s, ENT_QUOTES, 'UTF-8'); };
+    $k = mo_meld_k();
+    $o = array();
+    /* 1.1.41: unsichtbarer Doppel des Speicherknopfs VOR dem Knopf Testmeldung - die Eingabetaste in einem Textfeld
+     * loest den ersten Absendeknopf des Formulars aus; sie soll speichern wie bisher, nicht die Testmeldung senden. */
+    $o[] = '<button data-role="none" type="submit" tabindex="-1" aria-hidden="true" style="position:absolute;left:-10000px;top:auto;width:1px;height:1px;overflow:hidden"></button>';
+    $o[] = '<h3>' . $e(meld_t('TITEL', $k)) . '</h3>';
+    $o[] = meld_formular_html(mo_meld_block($cfg), mo_meld_anlaesse(), array(), $k);
+    list(, $lage) = meld_pruefzeile(mo_meld_block($cfg), mo_meld_bean($cfg), $k);
+    $o[] = '<div class="sm-hilfe">' . $e(meld_t('F_TEST', $k) . ' ' . $lage) . '</div>';
+    $o[] = '<div class="sm-knopfreihe"><button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="meld_test" value="1">'
+         . $e(meld_t('K_TEST', $k)) . '</button></div>';
+    return implode("\n", $o) . "\n";
+}
+}

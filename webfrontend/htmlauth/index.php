@@ -422,6 +422,12 @@ if ($mw_ist_post && isset($_POST['tts_test'])) {
 }
 /* Welle Mehrfach-Ziele (Sprachmodul 1.2.1): die Knoepfe "Testansage an Ziel n" schicken ansage_test_ziel=n - es spricht
  * nur dieses Ziel; der bisherige Knopf spricht an alle Ziele gleichzeitig. Eine unbrauchbare Nummer spricht nichts. */
+/* 1.1.41: Testmeldung an SignalBot (Knopf unter den Ansage-Regeln). */
+if ($mw_ist_post && isset($_POST['meld_test'])) {
+    list($meld_ok, $meld_satz) = mo_meld_test();
+    if ($meld_ok) { $mw_ok[] = mw_e($meld_satz); } else { $mw_fehler[] = mw_e($meld_satz); }
+    $mw_tab = 'tab-test';
+}
 if ($mw_ist_post && (isset($_POST['ansage_test']) || isset($_POST['ansage_test_ziel']))) {
     $mw_tk = mo_ansage_k();
     $mw_tnur = (isset($_POST['ansage_test_ziel']) && mo_mit_zielen()) ? ansage_test_ziel($_POST) : 0;
@@ -457,6 +463,14 @@ if ($mw_ist_post && isset($_POST['mqtt_save'])) {
     /* Gegen DIESELBE Positivliste wie die Sicherung. Ein leeres oder fehlendes
      * Thema wird beanstandet, nicht still zu 'maeher' (C6, Nr. 19). */
     list($mw_wert, $mw_l) = mo_wert_pruefen('mqtt_topic', isset($_POST['mqtt_topic']) ? $_POST['mqtt_topic'] : '');
+    /* 1.1.41 (Entscheidung des Hausherrn 23.11.2026 "Nur gemeinsame Bereiche", Regeln/07): kein Praefix auf einem
+     * gemeinsamen Bereich unter haus/ - nur hier und beim Zurueckspielen, nicht in der Pruefung beim Lesen der
+     * Konfiguration: ein schon gespeichertes bleibt in Betrieb, der Reiter Test meldet es. */
+    if (!$mw_l && hb_bereich($mw_wert) !== '' && $mw_wert !== (string) $mw_cfg['mqtt_topic']) {   // nur NEUE Eingaben: ein schon gespeichertes Praefix sperrt das Speichern
+        // des Reiters nicht (Regeln/07; Bauart Einspeisebremse 0.9.25)
+        $mw_l = array(mo_mangel('mqtt_topic', 'mqtt_topic',
+            sprintf(mw_e(mo_t('HAUSBEREICH.FEHLER')), mw_e($mw_wert), mw_e(hb_bereich($mw_wert)))));
+    }
     if ($mw_l) {
         $mw_fehler[] = mo_t('TEXT.NICHTS_GESPEICHERT');
         $mw_falsch = array();
@@ -487,7 +501,7 @@ if ($mw_ist_post && isset($_POST['mqtt_save'])) {
 }
 
 /* --- Einstellungen speichern --- */
-if ($mw_ist_post && isset($_POST['save'])) {
+if ($mw_ist_post && isset($_POST['save']) && !isset($_POST['meld_test'])) {     // 1.1.41: der Knopf Testmeldung (im selben Formular) speichert nicht
     mo_nennform('formular');
     /* Aus dem Bestand uebernehmen, was dieses Formular nicht mitschickt.
      * BIS 1.0.8 FEHLTE DAS FUER aktionstoken: jedes Speichern warf das Token
@@ -572,6 +586,12 @@ if ($mw_ist_post && isset($_POST['save'])) {
     $mw_tts_neu = ansage_formular_lesen($_POST, mo_tts(), $mw_tmangel, $mw_tbean,
         mo_ansage_opt() + array('ziele' => mo_mit_zielen(), 'token_vor_ort' => true, 'aus_gewinnt' => true), mo_ansage_k(), $mw_thinw);
     list($mw_neu['ansage_regeln']) = ansage_regeln_formular($_POST, mo_ansage_regeln(), array(), $mw_tmangel, $mw_tbean, mo_ansage_k());     // S2: Wann gesprochen wird (Stamm)
+    // 1.1.41: der Block 'Meldungen an SignalBot' (eine Beanstandung haelt das Speichern an, mit eigenem Namen)
+    $mw_mm = array();
+    $mw_mb = array();
+    $mw_neu['meldung'] = meld_formular_lesen($_POST, isset($mw_cfg['meldung']) ? $mw_cfg['meldung'] : null, mo_meld_anlaesse(), $mw_mm, $mw_mb, mo_meld_k(), mo_meld_haken_vorgabe());
+    foreach ($mw_mm as $mw_x) { $mw_mangel[] = mo_mangel('', 'meldung', mw_e($mw_x['text'])); }
+    foreach ($mw_mb as $mw_x) { $mw_tbean[] = $mw_x; }
     // 1.1.31: ein eingetipptes oder geloeschtes Sprechtoken ist nicht mehr vom Nachbarn; bis 1.1.30 ueberschrieb es der naechste Abgleich.
     $mw_neu['ansage_token_herkunft'] = ansage_token_herkunft_formular($_POST, isset($mw_neu['ansage_token_herkunft']) ? $mw_neu['ansage_token_herkunft'] : array(), mo_ansage_opt());
     /* Robonect-eigen (C6, Durchgang 01.10.2026, Nr. 19): leere Zonen werden beanstandet wie bis 1.1.17 -
@@ -1001,6 +1021,7 @@ echo ansage_regeln_html(mo_ansage_regeln(), array(), array(), array(
     'm' => function ($n) { return mw_falsch($n); },
     'c' => function ($n, $g) { return mw_haken('einst', $n, $g); },
     'token_vor_ort' => true), mo_ansage_k()); ?>
+<?= mo_meld_form_html($mw_cfg) ?>
 
 <div class="sm-legende">
 <span><i class="sm-punkt sm-b-lesen"></i> <?php echo mw_e(mo_t('LEGENDE.LESEN')); ?></span>
